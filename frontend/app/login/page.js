@@ -1,0 +1,101 @@
+"use client";
+
+import { useState } from "react";
+import { useRouter } from "next/navigation";
+import { useAuth } from "@/lib/context/AuthContext";
+
+export default function LoginPage() {
+  const router = useRouter();
+  const { setUser } = useAuth();
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState(null);
+
+  async function handleSubmit(e) {
+    e.preventDefault();
+    setLoading(true);
+    setError(null);
+
+    try {
+      // ==== Begitu backend Laravel Breeze (Sanctum) aktif, ganti blok ini ====
+      // 1) await fetch(`${API_URL}/sanctum/csrf-cookie`, { credentials: "include" });
+      // 2) const res = await fetch(`${API_URL}/login`, {
+      //      method: "POST", credentials: "include",
+      //      headers: { "Content-Type": "application/json" },
+      //      body: JSON.stringify({ email, password }),
+      //    });
+      // 3) if (!res.ok) throw new Error("Email atau password salah");
+      // 4) const user = await (await fetch(`${API_URL}/api/user`, { credentials: "include" })).json();
+      // 5) setUser(user);
+      // ==========================================================================
+
+      // Demo sementara (belum ada backend live): validasi asal-asalan biar alurnya kelihatan jalan
+      await new Promise((r) => setTimeout(r, 600));
+      if (!email || !password) throw new Error("Email dan password wajib diisi");
+
+      setUser({
+        nama: "Kharisma Larasyudha, S.Kom",
+        initial: "KL",
+        role: "Waka. Bid. Kurikulum",
+        email,
+      });
+      router.push("/dashboard");
+    } catch (err) {
+      setError(err.message || "Login gagal, coba lagi.");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  return (
+    <div className="w-full min-h-screen flex items-center justify-center bg-slate-50 px-4">
+      <div className="w-full max-w-sm bg-white border border-slate-200 rounded-xl shadow-sm p-6">
+        <div className="flex flex-col items-center mb-6">
+          <img src="/logo-kosgoro.png" alt="Logo SMK Kosgoro" className="w-14 h-14 object-contain mb-3" />
+          <h1 className="font-bold text-[#1e3a8a] text-lg">SIM KOSGORO</h1>
+          <p className="text-xs text-slate-500">Kurikulum & Presensi &bull; SMK Kosgoro Kota Bogor</p>
+        </div>
+
+        <form onSubmit={handleSubmit} className="space-y-4">
+          <div>
+            <label className="block text-[11px] font-bold text-slate-500 uppercase mb-1">Email</label>
+            <input
+              type="email"
+              required
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              placeholder="nama@smk-kosgoro.sch.id"
+              className="w-full text-sm bg-slate-50 border border-slate-200 rounded py-2.5 px-3 outline-none focus:border-blue-300"
+            />
+          </div>
+          <div>
+            <label className="block text-[11px] font-bold text-slate-500 uppercase mb-1">Password</label>
+            <input
+              type="password"
+              required
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              placeholder="\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022"
+              className="w-full text-sm bg-slate-50 border border-slate-200 rounded py-2.5 px-3 outline-none focus:border-blue-300"
+            />
+          </div>
+
+          {error && (
+            <p className="text-xs text-red-500 bg-red-50 border border-red-100 rounded px-3 py-2">
+              <i className="fa-solid fa-circle-exclamation mr-1"></i> {error}
+            </p>
+          )}
+
+          <button
+            type="submit"
+            disabled={loading}
+            className="w-full bg-[#1e3a8a] hover:bg-blue-900 text-white text-sm font-medium py-2.5 rounded shadow-sm disabled:opacity-60"
+          >
+            {loading ? "Memeriksa..." : "Masuk"}
+          </button>
+        </form>
+      </div>
+    </div>
+  );
+}
