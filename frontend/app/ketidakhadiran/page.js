@@ -4,6 +4,8 @@ import { useEffect, useState } from "react";
 import AppShell from "@/components/AppShell";
 import GoogleSheetSyncPanel from "@/components/GoogleSheetSyncPanel";
 import { useTahunAjaran } from "@/lib/context/TahunAjaranContext";
+import { apiGet, apiPost } from "@/lib/api";
+import { mapBackendRow } from "@/lib/ketidakhadiranUtils";
 
 const statusStyle = {
   S: { label: "S", desc: "(Sakit)", box: "bg-amber-50 text-amber-700 border-amber-200" },
@@ -14,16 +16,25 @@ const statusStyle = {
 
 const todayId = new Date().toLocaleDateString("id-ID", { weekday: "long" });
 const todayStr = new Date().toLocaleDateString("id-ID");
+const todayISO = new Date().toISOString().slice(0, 10);
 
 export default function KetidakhadiranPage() {
   const { data, current } = useTahunAjaran();
   const { guruList } = data;
 
-  const [daftar, setDaftar] = useState(data.ketidakhadiran.daftarKetidakhadiran);
+  const [daftar, setDaftar] = useState([]);
+  const [loadingDaftar, setLoadingDaftar] = useState(true);
+  const [submitting, setSubmitting] = useState(false);
 
+  // Begitu halaman dibuka, langsung tampilin data yang UDAH TERSIMPAN di database (cepat,
+  // gak perlu nunggu fetch ke Google Sheets dulu). Sinkronisasi live di panel bawah tetep
+  // jalan di background buat nge-update kalau ada perubahan baru di spreadsheet.
   useEffect(() => {
-    setDaftar(data.ketidakhadiran.daftarKetidakhadiran);
-  }, [data.ketidakhadiran]);
+    apiGet("/ketidakhadiran")
+      .then((rows) => setDaftar(rows.map(mapBackendRow)))
+      .catch((err) => console.error("Gagal memuat data ketidakhadiran:", err))
+      .finally(() => setLoadingDaftar(false));
+  }, []);
 
   const [form, setForm] = useState({
     guru_id: "",
@@ -46,26 +57,41 @@ export default function KetidakhadiranPage() {
     const guru = guruList.find((g) => String(g.id) === String(form.guru_id));
     if (!guru) return;
 
-    const kelasArr = form.kelas ? form.kelas.split(",").map((k) => k.trim()).filter(Boolean) : ["-"];
+    const kelasArr = form.kelas ? form.kelas.split(",").map((k) => k.trim()).filter(Boolean) : [];
 
-    setDaftar((prev) => [
-      {
-        no: prev.length + 1,
-        guru_id: guru.id,
-        nama: guru.nama,
-        mapel: form.mapel || guru.mapel || "-",
-        hari: form.hari,
-        tanggal: form.tanggal,
-        jam: form.jam_ke || "-",
-        kelas: kelasArr,
-        status: form.kode,
-        pengganti: form.pengganti,
-        catatan: form.catatan,
-      },
-      ...prev,
-    ]);
-
-    setForm((f) => ({ ...f, guru_id: "", mapel: "", jam_ke: "", kelas: "", pengganti: "", catatan: "" }));
+    setSubmitting(true);
+    apiPost("/ketidakhadiran", {
+      guru_id: guru.id,
+      mapel: form.mapel || guru.mapel || null,
+      hari: form.hari,
+      tanggal: todayISO,
+      jam_ke: form.jam_ke || null,
+      kelas: kelasArr.join(", "),
+      kode: form.kode,
+      pengganti: form.pengganti || null,
+      catatan: form.catatan || null,
+    })
+      .then(() => {
+        setDaftar((prev) => [
+          {
+            no: prev.length + 1,
+            guru_id: guru.id,
+            nama: guru.nama,
+            mapel: form.mapel || guru.mapel || "-",
+            hari: form.hari,
+            tanggal: form.tanggal,
+            jam: form.jam_ke || "-",
+            kelas: kelasArr.length ? kelasArr : ["-"],
+            status: form.kode,
+            pengganti: form.pengganti,
+            catatan: form.catatan,
+          },
+          ...prev,
+        ]);
+        setForm((f) => ({ ...f, guru_id: "", mapel: "", jam_ke: "", kelas: "", pengganti: "", catatan: "" }));
+      })
+      .catch((err) => alert(err.message || "Gagal menyimpan disposisi ke server."))
+      .finally(() => setSubmitting(false));
   }
 
   const summaryCards = [
@@ -109,7 +135,16 @@ export default function KetidakhadiranPage() {
           </div>
 
           {/* SINKRONISASI GOOGLE SPREADSHEET (live sync) */}
-          <GoogleSheetSyncPanel onImport={(rows) => setDaftar(rows)} />
+          <GoogleSheetSyncPanel
+            onImport={() => {
+              // Sengaja refetch dari /api/ketidakhadiran (bukan langsung pakai hasil sync),
+              // biar entri yang ditambah manual lewat form input cepat gak ketimpa/ilang
+              // dari tampilan - daftar selalu nyerminin isi database yang paling lengkap.
+              apiGet("/ketidakhadiran")
+                .then((rows) => setDaftar(rows.map(mapBackendRow)))
+                .catch((err) => console.error("Gagal refresh data ketidakhadiran:", err));
+            }}
+          />
 
           {/* FAST INPUT FORM */}
           <form onSubmit={submitForm} className="bg-white border border-slate-200 rounded-lg shadow-sm mb-6">
@@ -181,8 +216,8 @@ export default function KetidakhadiranPage() {
                   <input type="text" placeholder="Contoh: Istirahat Dokter, Anter anak sakit..." className="w-full text-xs bg-slate-50 border border-slate-200 rounded py-2 px-3 outline-none" value={form.catatan} onChange={(e) => update("catatan", e.target.value)} />
                 </div>
                 <div className="col-span-1 flex items-end">
-                  <button type="submit" className="w-full bg-[#1e3a8a] text-white text-xs font-medium py-2 px-4 rounded hover:bg-blue-900 transition shadow-sm h-[34px]">
-                    Simpan Disposisi
+                  <button type="submit" disabled={submitting} className="w-full bg-[#1e3a8a] text-white text-xs font-medium py-2 px-4 rounded hover:bg-blue-900 transition shadow-sm h-[34px] disabled:opacity-60">
+                    {submitting ? "Menyimpan..." : "Simpan Disposisi"}
                   </button>
                 </div>
               </div>
@@ -213,6 +248,22 @@ export default function KetidakhadiranPage() {
                   </tr>
                 </thead>
                 <tbody className="text-xs text-slate-600 divide-y divide-slate-100">
+                  {loadingDaftar && (
+                    <tr>
+                      <td colSpan={8} className="p-8 text-center text-slate-400 text-xs">
+                        <i className="fa-solid fa-spinner fa-spin text-2xl mb-2 block"></i>
+                        Memuat data dari database...
+                      </td>
+                    </tr>
+                  )}
+                  {!loadingDaftar && daftar.length === 0 && (
+                    <tr>
+                      <td colSpan={8} className="p-8 text-center text-slate-400 text-xs">
+                        <i className="fa-regular fa-folder-open text-2xl mb-2 block"></i>
+                        Belum ada catatan ketidakhadiran. Sambungkan Google Spreadsheet di atas, atau isi form input cepat.
+                      </td>
+                    </tr>
+                  )}
                   {daftar.map((row, idx) => {
                     const s = statusStyle[row.status];
                     return (

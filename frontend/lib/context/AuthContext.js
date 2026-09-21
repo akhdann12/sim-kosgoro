@@ -1,35 +1,64 @@
 "use client";
 
-import { createContext, useContext, useState } from "react";
+import { createContext, useContext, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
+import { apiPost, getToken, setToken } from "@/lib/api";
 
 const AuthContext = createContext(null);
 
-// User default buat demo tampilan (nanti diganti hasil fetch GET /api/user setelah login Breeze beneran)
-const DEMO_USER = {
-  nama: "Kharisma Larasyudha, S.Kom",
-  initial: "KL",
-  role: "Waka. Bid. Kurikulum",
-  email: "kharisma@smk-kosgoro.sch.id",
-};
-
 export function AuthProvider({ children }) {
-  const [user, setUser] = useState(DEMO_USER);
+  const [user, setUser] = useState(null);
+  const [checkingSession, setCheckingSession] = useState(true);
   const router = useRouter();
+
+  // Waktu app pertama dibuka, cek apakah ada token tersimpan dari sesi sebelumnya
+  useEffect(() => {
+    const token = getToken();
+    if (!token) {
+      setCheckingSession(false);
+      return;
+    }
+    fetch("/api/user", { headers: { Authorization: `Bearer ${token}` } })
+      .then((res) => (res.ok ? res.json() : Promise.reject()))
+      .then((data) => setUser({ nama: data.name, email: data.email, initial: initials(data.name) }))
+      .catch(() => setToken(null))
+      .finally(() => setCheckingSession(false));
+  }, []);
+
+  async function login(email, password) {
+    const result = await apiPost("/login", { email, password });
+    setToken(result.token);
+    setUser({ nama: result.user.name, email: result.user.email, initial: initials(result.user.name) });
+    return result;
+  }
 
   async function logout() {
     try {
-      // Begitu backend Laravel Breeze aktif, ganti/uncomment baris ini:
-      // await apiPost("/logout", {});
+      await apiPost("/logout", {});
     } catch (err) {
       console.error("Gagal logout ke server:", err);
     } finally {
+      setToken(null);
       setUser(null);
       router.push("/login");
     }
   }
 
-  return <AuthContext.Provider value={{ user, setUser, logout }}>{children}</AuthContext.Provider>;
+  return (
+    <AuthContext.Provider value={{ user, setUser, login, logout, checkingSession }}>
+      {children}
+    </AuthContext.Provider>
+  );
+}
+
+function initials(name) {
+  if (!name) return "?";
+  return name
+    .split(" ")
+    .filter(Boolean)
+    .slice(0, 2)
+    .map((w) => w[0]?.toUpperCase())
+    .join("");
 }
 
 export function useAuth() {

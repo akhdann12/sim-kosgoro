@@ -5,12 +5,15 @@ import AppShell from "@/components/AppShell";
 import TambahGuruModal from "@/components/TambahGuruModal";
 import ImportGuruPanel from "@/components/ImportGuruPanel";
 import { useGuruMaster } from "@/lib/context/GuruMasterContext";
-import { JABATAN_NON_PENGAJAR } from "@/lib/data/generateTaData";
+
+const JABATAN_NON_PENGAJAR = ["Tenaga Administrasi", "Tenaga Kebersihan"];
 
 export default function DataMasterGuruPage() {
-  const { guruList, addGuru, removeGuru, importGuru } = useGuruMaster();
+  const { guruList, loading, error, addGuru, removeGuru, importGuru, refresh } = useGuruMaster();
   const [showModal, setShowModal] = useState(false);
   const [search, setSearch] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [removingId, setRemovingId] = useState(null);
 
   const totalGuru = guruList.length;
   const totalPengajar = guruList.filter((g) => !JABATAN_NON_PENGAJAR.includes(g.jabatan)).length;
@@ -21,20 +24,47 @@ export default function DataMasterGuruPage() {
     return g.nama.toLowerCase().includes(q) || g.jabatan.toLowerCase().includes(q) || (g.mapel || "").toLowerCase().includes(q);
   });
 
-  function handleAdd(payload) {
-    addGuru(payload);
-    setShowModal(false);
+  async function handleAdd(payload) {
+    setSaving(true);
+    try {
+      await addGuru(payload);
+      setShowModal(false);
+    } catch (err) {
+      alert(err.message || "Gagal menyimpan guru baru.");
+    } finally {
+      setSaving(false);
+    }
   }
 
-  function handleRemove(g) {
+  async function handleRemove(g) {
     const ok = window.confirm(`Hapus "${g.nama}" dari data master? Data ini akan ikut hilang dari Dashboard, Presensi Kegiatan, dan Ketidakhadiran.`);
-    if (ok) removeGuru(g.id);
+    if (!ok) return;
+    setRemovingId(g.id);
+    try {
+      await removeGuru(g.id);
+    } catch (err) {
+      alert(err.message || "Gagal menghapus guru.");
+    } finally {
+      setRemovingId(null);
+    }
   }
 
   return (
     <>
       <AppShell>
         <div className="flex-1 overflow-y-auto p-4 md:p-6">
+          {loading && (
+            <div className="mb-4 text-xs text-slate-400 flex items-center">
+              <i className="fa-solid fa-spinner fa-spin mr-2"></i> Memuat data dari server...
+            </div>
+          )}
+          {error && (
+            <div className="mb-4 text-xs text-red-600 bg-red-50 border border-red-100 rounded px-3 py-2 flex items-center justify-between">
+              <span><i className="fa-solid fa-circle-exclamation mr-1.5"></i> {error}</span>
+              <button onClick={refresh} className="font-semibold underline">Coba lagi</button>
+            </div>
+          )}
+
           {/* Page Title & Actions */}
           <div className="flex flex-col md:flex-row justify-between items-start md:items-center mb-6 gap-3">
             <div>
@@ -118,8 +148,8 @@ export default function DataMasterGuruPage() {
                         <span className="font-bold text-sm text-[#1e3a8a]">{g.nama}</span>
                       </td>
                       <td className="p-3">
-                        {g.jabatanStyle ? (
-                          <span className={g.jabatanStyle === "navy" ? "bg-[#1e3a8a] text-white px-2 py-1 rounded text-[10px] font-medium" : "bg-blue-50 text-blue-600 px-2 py-1 rounded text-[10px] font-medium border border-blue-100"}>
+                        {/^(Kepala|Waka\.)/.test(g.jabatan) ? (
+                          <span className={/^Waka\./.test(g.jabatan) ? "bg-[#1e3a8a] text-white px-2 py-1 rounded text-[10px] font-medium" : "bg-blue-50 text-blue-600 px-2 py-1 rounded text-[10px] font-medium border border-blue-100"}>
                             {g.jabatan}
                           </span>
                         ) : (
@@ -128,16 +158,20 @@ export default function DataMasterGuruPage() {
                         {g.mapel && <span className="ml-2 text-[10px] text-slate-400">&bull; {g.mapel}</span>}
                       </td>
                       <td className="p-3 text-right pr-6">
-                        <button onClick={() => handleRemove(g)} className="text-red-500 hover:text-red-700 text-[11px] font-medium">
-                          <i className="fa-solid fa-trash-can mr-1"></i> Hapus
+                        <button onClick={() => handleRemove(g)} disabled={removingId === g.id} className="text-red-500 hover:text-red-700 text-[11px] font-medium disabled:opacity-50">
+                          {removingId === g.id ? (
+                            <><i className="fa-solid fa-spinner fa-spin mr-1"></i> Menghapus...</>
+                          ) : (
+                            <><i className="fa-solid fa-trash-can mr-1"></i> Hapus</>
+                          )}
                         </button>
                       </td>
                     </tr>
                   ))}
-                  {filtered.length === 0 && (
+                  {!loading && filtered.length === 0 && (
                     <tr>
                       <td colSpan={5} className="p-6 text-center text-slate-400 text-xs">
-                        Gak ada data yang cocok.
+                        {guruList.length === 0 ? "Belum ada data guru. Tambah manual atau import lewat panel di atas." : "Gak ada data yang cocok."}
                       </td>
                     </tr>
                   )}
@@ -156,7 +190,7 @@ export default function DataMasterGuruPage() {
         </div>
       </AppShell>
 
-      {showModal && <TambahGuruModal onClose={() => setShowModal(false)} onSubmit={handleAdd} />}
+      {showModal && <TambahGuruModal onClose={() => setShowModal(false)} onSubmit={handleAdd} saving={saving} />}
     </>
   );
 }

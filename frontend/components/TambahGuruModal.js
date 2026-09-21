@@ -14,7 +14,7 @@ const JABATAN_PRESET = [
   "Lainnya",
 ];
 
-export default function TambahGuruModal({ onClose, onSubmit }) {
+export default function TambahGuruModal({ onClose, onSubmit, saving = false }) {
   const [nama, setNama] = useState("");
   const [jabatanPreset, setJabatanPreset] = useState("Guru Mapel");
   const [jabatanCustom, setJabatanCustom] = useState("");
@@ -105,8 +105,8 @@ export default function TambahGuruModal({ onClose, onSubmit }) {
           <button type="button" onClick={onClose} className="px-4 py-2 text-xs font-medium text-slate-600 hover:bg-slate-50 rounded border border-slate-200">
             Batal
           </button>
-          <button type="submit" className="px-4 py-2 text-xs font-medium text-white bg-[#1e3a8a] hover:bg-blue-900 rounded shadow-sm">
-            Simpan
+          <button type="submit" disabled={saving} className="px-4 py-2 text-xs font-medium text-white bg-[#1e3a8a] hover:bg-blue-900 rounded shadow-sm disabled:opacity-60">
+            {saving ? "Menyimpan..." : "Simpan"}
           </button>
         </div>
       </form>

@@ -6,7 +6,7 @@ import { useAuth } from "@/lib/context/AuthContext";
 
 export default function LoginPage() {
   const router = useRouter();
-  const { setUser } = useAuth();
+  const { login } = useAuth();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [loading, setLoading] = useState(false);
@@ -18,28 +18,7 @@ export default function LoginPage() {
     setError(null);
 
     try {
-      // ==== Begitu backend Laravel Breeze (Sanctum) aktif, ganti blok ini ====
-      // 1) await fetch(`${API_URL}/sanctum/csrf-cookie`, { credentials: "include" });
-      // 2) const res = await fetch(`${API_URL}/login`, {
-      //      method: "POST", credentials: "include",
-      //      headers: { "Content-Type": "application/json" },
-      //      body: JSON.stringify({ email, password }),
-      //    });
-      // 3) if (!res.ok) throw new Error("Email atau password salah");
-      // 4) const user = await (await fetch(`${API_URL}/api/user`, { credentials: "include" })).json();
-      // 5) setUser(user);
-      // ==========================================================================
-
-      // Demo sementara (belum ada backend live): validasi asal-asalan biar alurnya kelihatan jalan
-      await new Promise((r) => setTimeout(r, 600));
-      if (!email || !password) throw new Error("Email dan password wajib diisi");
-
-      setUser({
-        nama: "Kharisma Larasyudha, S.Kom",
-        initial: "KL",
-        role: "Waka. Bid. Kurikulum",
-        email,
-      });
+      await login(email, password);
       router.push("/dashboard");
     } catch (err) {
       setError(err.message || "Login gagal, coba lagi.");

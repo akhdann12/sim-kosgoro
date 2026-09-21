@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import AppShell from "@/components/AppShell";
 import TambahEventModal from "@/components/TambahEventModal";
 import { useTahunAjaran } from "@/lib/context/TahunAjaranContext";
+import { apiPost } from "@/lib/api";
 import { exportRowsToExcel, exportMultiSectionPDF } from "@/lib/exportUtils";
 
 const STATUS_OPTIONS = [
@@ -19,76 +20,54 @@ const statusSelectClass = {
 };
 
 export default function PresensiKegiatanPage() {
-  const { data, current } = useTahunAjaran();
+  const { data, current, loading, error, refresh } = useTahunAjaran();
   const [agendaList, setAgendaList] = useState(data.event.agendaList);
   const [guruEvent, setGuruEvent] = useState(data.event.guruEvent);
   const [activeFilter, setActiveFilter] = useState("all"); // "all" | agenda key
   const [showModal, setShowModal] = useState(false);
+  const [savingCell, setSavingCell] = useState(null); // "guruId-agendaIdx" pas lagi nyimpen ke server
+  const [savingEvent, setSavingEvent] = useState(false);
 
-  // Kalau TA diganti di sidebar, reset data lokal (biar ikutan berubah tapi status yang udah diedit manual di-refresh dari data TA baru)
+  // Sinkron ulang state lokal tiap kali data dari server berubah (ganti TA, abis refresh, dll)
   useEffect(() => {
     setAgendaList(data.event.agendaList);
     setGuruEvent(data.event.guruEvent);
-    setActiveFilter("all");
   }, [data.event]);
 
-  function recalcAgenda(nextGuruEvent, agendaSource) {
-    return agendaSource.map((ag, idx) => {
-      const hadir = nextGuruEvent.filter((g) => g.status[idx].value === "hadir").length;
-      const total = nextGuruEvent.length;
-      const tidakHadir = total - hadir;
-      const persenNum = total > 0 ? Math.round((hadir / total) * 1000) / 10 : 0;
-      return {
-        ...ag,
-        hadir, total, persenNum,
-        persen: tidakHadir === 0 ? "100% Hadir" : `${persenNum}% (${tidakHadir} Tidak Hadir)`,
-        barClass: tidakHadir === 0 ? "bg-emerald-500" : persenNum >= 90 ? "bg-red-400" : "bg-red-500",
-        textClass: tidakHadir === 0 ? "text-emerald-600" : persenNum >= 90 ? "text-red-500" : "text-red-600",
-      };
-    });
-  }
+  async function updateStatus(guruId, agendaIdx, newValue) {
+    const agenda = agendaList[agendaIdx];
+    if (!agenda?.id) return;
 
-  function updateStatus(guruId, agendaIdx, newValue) {
     let reason = "";
     if (newValue !== "hadir") {
       reason = window.prompt("Alasan tidak hadir (opsional, buat catatan di rekap):", "") || "Tanpa keterangan";
     }
-    setGuruEvent((prev) => {
-      const next = prev.map((g) => {
-        if (g.id !== guruId) return g;
-        const status = [...g.status];
-        status[agendaIdx] = { value: newValue, reason };
-        return { ...g, status };
-      });
-      setAgendaList((prevAgenda) => recalcAgenda(next, prevAgenda));
-      return next;
-    });
+
+    const cellKey = `${guruId}-${agendaIdx}`;
+    setSavingCell(cellKey);
+    try {
+      await apiPost(`/kegiatan/${agenda.id}/kehadiran`, { guru_id: guruId, status: newValue, reason });
+      await refresh();
+    } catch (err) {
+      alert(err.message || "Gagal menyimpan perubahan status ke server.");
+    } finally {
+      setSavingCell(null);
+    }
   }
 
-  function handleTambahEvent({ nama, tanggal, checked }) {
-    const dateObj = new Date(tanggal);
-    const tanggalLabel = isNaN(dateObj)
-      ? tanggal
-      : dateObj.toLocaleDateString("id-ID", { day: "numeric", month: "short", year: "numeric" });
-
-    const newAgenda = {
-      key: `agenda-custom-${Date.now()}`,
-      label: nama.toUpperCase(),
-      namaAsli: nama,
-      tanggal: tanggalLabel,
-    };
-
-    const nextGuruEvent = guruEvent.map((g) => ({
-      ...g,
-      status: [...g.status, checked[g.id] ? { value: "hadir", reason: "" } : { value: "alpa", reason: "Tanpa keterangan" }],
-    }));
-
-    const nextAgendaList = recalcAgenda(nextGuruEvent, [...agendaList, newAgenda]);
-
-    setGuruEvent(nextGuruEvent);
-    setAgendaList(nextAgendaList);
-    setActiveFilter("all");
-    setShowModal(false);
+  async function handleTambahEvent({ nama, tanggal, checked }) {
+    setSavingEvent(true);
+    try {
+      const kehadiran = guruEvent.map((g) => ({ guru_id: g.id, status: checked[g.id] ? "hadir" : "alpa" }));
+      await apiPost("/kegiatan", { nama, tanggal, kehadiran });
+      setActiveFilter("all");
+      setShowModal(false);
+      await refresh();
+    } catch (err) {
+      alert(err.message || "Gagal menambah kegiatan baru.");
+    } finally {
+      setSavingEvent(false);
+    }
   }
 
   const visibleAgendaIdx = agendaList
@@ -104,6 +83,17 @@ export default function PresensiKegiatanPage() {
     <>
       <AppShell>
         <div className="flex-1 overflow-y-auto p-4 md:p-6">
+          {loading && (
+            <div className="mb-4 text-xs text-slate-400 flex items-center">
+              <i className="fa-solid fa-spinner fa-spin mr-2"></i> Memuat data dari server...
+            </div>
+          )}
+          {error && (
+            <div className="mb-4 text-xs text-red-600 bg-red-50 border border-red-100 rounded px-3 py-2 flex items-center justify-between">
+              <span><i className="fa-solid fa-circle-exclamation mr-1.5"></i> {error}</span>
+              <button onClick={refresh} className="font-semibold underline">Coba lagi</button>
+            </div>
+          )}
           {/* Page Title & Actions */}
           <div className="flex flex-col lg:flex-row justify-between items-start lg:items-center mb-6">
             <div>
@@ -223,19 +213,23 @@ export default function PresensiKegiatanPage() {
                       <td className="p-3 text-slate-500 text-[11px]">{g.jabatan}</td>
                       {visibleAgendaIdx.map((idx) => {
                         const s = g.status[idx];
+                        const cellKey = `${g.id}-${idx}`;
+                        const isSaving = savingCell === cellKey;
                         return (
                           <td key={idx} className="p-3 text-center">
                             <div className="inline-flex items-center gap-1">
                               <select
                                 value={s.value}
+                                disabled={isSaving}
                                 onChange={(e) => updateStatus(g.id, idx, e.target.value)}
-                                className={`text-[11px] font-semibold rounded px-1.5 py-0.5 border outline-none cursor-pointer ${statusSelectClass[s.value]}`}
+                                className={`text-[11px] font-semibold rounded px-1.5 py-0.5 border outline-none cursor-pointer disabled:opacity-50 ${statusSelectClass[s.value]}`}
                               >
                                 {STATUS_OPTIONS.map((opt) => (
                                   <option key={opt.value} value={opt.value}>{opt.label}</option>
                                 ))}
                               </select>
-                              {s.value !== "hadir" && s.reason && (
+                              {isSaving && <i className="fa-solid fa-spinner fa-spin text-slate-400 text-[10px]"></i>}
+                              {!isSaving && s.value !== "hadir" && s.reason && (
                                 <i className="fa-solid fa-circle-info text-slate-400 text-[10px] cursor-help" title={s.reason}></i>
                               )}
                             </div>
@@ -273,6 +267,7 @@ export default function PresensiKegiatanPage() {
       {showModal && (
         <TambahEventModal
           guruList={guruEvent.map((g) => ({ id: g.id, nama: g.nama, jabatan: g.jabatan }))}
+          saving={savingEvent}
           onClose={() => setShowModal(false)}
           onSubmit={handleTambahEvent}
         />

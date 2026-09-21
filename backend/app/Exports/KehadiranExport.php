@@ -29,7 +29,9 @@ class KehadiranExport implements FromCollection, WithHeadings, WithTitle
 
     public function collection()
     {
-        $guruList = Guru::where('aktif', true)->orderBy('nama')->get();
+        $guruList = Guru::where('aktif', true)
+            ->whereNotIn('jabatan', ['Tenaga Administrasi', 'Tenaga Kebersihan'])
+            ->orderBy('nama')->get();
 
         return $guruList->values()->map(function (Guru $guru, int $idx) {
             $rows = Kehadiran::where('guru_id', $guru->id)

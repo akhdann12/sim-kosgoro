@@ -2,35 +2,10 @@
 
 import { useEffect, useRef, useState } from "react";
 import { useNotifications } from "@/lib/context/NotificationContext";
+import { apiGet } from "@/lib/api";
+import { mapBackendRow } from "@/lib/ketidakhadiranUtils";
 
 const HEADER_HINTS = ["No", "Nama Guru", "Mata Pelajaran", "Hari", "Tanggal", "Jam Ke-", "Kelas", "Keterangan (S/I/A/D)", "Guru Pengganti / Tugas", "Keterangan"];
-
-const FIELD_MAP = {
-  namaguru: "nama",
-  nama: "nama",
-  matapelajaran: "mapel",
-  mapel: "mapel",
-  hari: "hari",
-  tanggal: "tanggal",
-  jamke: "jam",
-  jamke_: "jam",
-  jam: "jam",
-  kelas: "kelas",
-  keterangansiad: "status",
-  keterangan: "status", // fallback kalau cuma ada 1 kolom "keterangan" buat kode S/I/A/D
-  kode: "status",
-  status: "status",
-  gurupenggantitugas: "pengganti",
-  gurupengganti: "pengganti",
-  pengganti: "pengganti",
-  inval: "pengganti",
-  keternangan: "catatan", // toleransi typo umum di spreadsheet sekolah
-  catatan: "catatan",
-};
-
-function normalizeKey(k) {
-  return String(k).toLowerCase().replace(/[^a-z0-9]/g, "");
-}
 
 // spreadsheet URL -> { sheetId, gid }
 function parseSheetUrl(url) {
@@ -38,38 +13,6 @@ function parseSheetUrl(url) {
   const gidMatch = url.match(/[?&#]gid=([0-9]+)/);
   if (!idMatch) return null;
   return { sheetId: idMatch[1], gid: gidMatch ? gidMatch[1] : "0" };
-}
-
-function buildCsvUrl({ sheetId, gid }) {
-  return `https://docs.google.com/spreadsheets/d/${sheetId}/gviz/tq?tqx=out:csv&gid=${gid}`;
-}
-
-function mapRows(rawRows) {
-  return rawRows
-    .filter((row) => Object.values(row).some((v) => String(v).trim() !== ""))
-    .map((row, idx) => {
-      const norm = {};
-      Object.entries(row).forEach(([k, v]) => {
-        const field = FIELD_MAP[normalizeKey(k)];
-        if (field && !(field in norm)) norm[field] = v; // kolom pertama yg cocok menang (biar "Keterangan" status gak ketimpa "Keterangan" catatan)
-      });
-
-      const kodeRaw = String(norm.status || "A").trim().toUpperCase().charAt(0);
-      const kode = ["S", "I", "A", "D"].includes(kodeRaw) ? kodeRaw : "A";
-
-      return {
-        no: idx + 1,
-        nama: norm.nama || "Tanpa Nama",
-        mapel: norm.mapel || "-",
-        hari: norm.hari || "-",
-        tanggal: norm.tanggal || "-",
-        jam: norm.jam || "-",
-        kelas: norm.kelas ? String(norm.kelas).split(",").map((k) => k.trim()).filter(Boolean) : ["-"],
-        status: kode,
-        pengganti: norm.pengganti || "",
-        catatan: norm.catatan || "",
-      };
-    });
 }
 
 const POLL_INTERVAL_MS = 60000; // cek perubahan tiap 60 detik selama "Live Sync" aktif
@@ -92,18 +35,16 @@ export default function GoogleSheetSyncPanel({ onImport }) {
   const lastHashRef = useRef(null);
   const intervalRef = useRef(null);
 
-  async function fetchAndApply({ silent = false } = {}) {
+  // Baris dari backend (tabel ketidakhadiran, relasi guru sudah di-load) -> bentuk row buat tabel di UI
+async function fetchAndApply({ silent = false } = {}) {
     if (!connection) return;
     if (!silent) setLoading(true);
     try {
-      const Papa = (await import("papaparse")).default;
-      const csvUrl = buildCsvUrl(connection);
-      const res = await fetch(csvUrl, { cache: "no-store" });
-      if (!res.ok) throw new Error("Gagal mengambil data spreadsheet");
-      const csvText = await res.text();
-
-      const parsed = Papa.parse(csvText, { header: true, skipEmptyLines: true });
-      const rows = mapRows(parsed.data);
+      // Sinkron lewat backend (server-to-server), BUKAN fetch langsung dari browser ke Google -
+      // ini yang bikin datanya beneran kesimpen ke database, jadi ikut mempengaruhi Dashboard
+      // & bukan cuma tampil doang di halaman ini.
+      const res = await apiGet("/ketidakhadiran/dari-spreadsheet", { sheet_id: connection.sheetId, gid: connection.gid });
+      const rows = (res.data || []).map(mapBackendRow);
       const hash = JSON.stringify(rows);
 
       if (hash !== lastHashRef.current) {
@@ -115,19 +56,26 @@ export default function GoogleSheetSyncPanel({ onImport }) {
         if (!isFirstLoad) {
           addNotification({
             title: "Data Ketidakhadiran Diperbarui",
-            message: `${rows.length} baris dari Google Spreadsheet berhasil disinkronkan ke sistem.`,
+            message: `${rows.length} baris dari Google Spreadsheet disinkronkan ke database - ikut mempengaruhi rekap Dashboard.`,
           });
         }
       } else {
         setLastSyncAt(new Date());
       }
 
-      setStatus({ type: "success", message: `Tersambung \u2022 ${rows.length} baris terbaca dari spreadsheet.` });
+      let message = `Tersambung \u2022 ${rows.length} baris tersimpan ke database.`;
+      let type = "success";
+      if (res.dilewati && res.dilewati.length) {
+        type = "warning";
+        const contoh = res.dilewati.slice(0, 3).join(", ");
+        message += ` \u26a0\ufe0f ${res.dilewati.length} nama di spreadsheet gak ketemu di Data Master Guru (${contoh}${res.dilewati.length > 3 ? ", ..." : ""}) - cek ejaan namanya sama.`;
+      }
+      setStatus({ type, message });
     } catch (err) {
       console.error(err);
       setStatus({
         type: "error",
-        message: 'Gagal mengambil data. Pastikan sheet dibagikan sebagai "Anyone with the link (Viewer)".',
+        message: err.message || 'Gagal mengambil data. Pastikan sheet dibagikan sebagai "Anyone with the link (Viewer)".',
       });
     } finally {
       if (!silent) setLoading(false);
@@ -246,8 +194,8 @@ export default function GoogleSheetSyncPanel({ onImport }) {
       ) : null}
 
       {status && (
-        <div className={`px-4 pb-3 text-[11px] ${status.type === "success" ? "text-emerald-600" : "text-red-500"}`}>
-          <i className={`fa-solid ${status.type === "success" ? "fa-circle-check" : "fa-circle-exclamation"} mr-1`}></i>
+        <div className={`px-4 pb-3 text-[11px] ${status.type === "success" ? "text-emerald-600" : status.type === "warning" ? "text-amber-600" : "text-red-500"}`}>
+          <i className={`fa-solid ${status.type === "success" ? "fa-circle-check" : status.type === "warning" ? "fa-triangle-exclamation" : "fa-circle-exclamation"} mr-1`}></i>
           {status.message}
         </div>
       )}
@@ -286,8 +234,10 @@ export default function GoogleSheetSyncPanel({ onImport }) {
             <p className="font-bold text-slate-700 mb-1">4. Sambungkan ke sistem:</p>
             <p>
               Tempel link tadi (yang udah ada #gid=... nya) di kolom di atas, klik <b>Sambungkan</b>. Setelah tersambung,
-              sistem otomatis ngecek perubahan tiap 1 menit — begitu ada baris baru/berubah di spreadsheet, tabel di
-              bawah dan notifikasi lonceng di pojok kanan atas otomatis ke-update, tanpa perlu upload manual lagi.
+              sistem ngambil datanya lewat backend (bukan langsung dari browser) dan <b>kesimpen ke database</b> — jadi
+              ikut mempengaruhi rekap kehadiran di Dashboard juga, gak cuma tampil di halaman ini doang. Dicek ulang
+              otomatis tiap 1 menit — begitu ada baris baru/berubah di spreadsheet, database dan notifikasi lonceng di
+              pojok kanan atas ikut ke-update.
             </p>
           </div>
           <div>
@@ -301,12 +251,12 @@ export default function GoogleSheetSyncPanel({ onImport }) {
             </p>
           </div>
           <div>
-            <p className="font-bold text-slate-700 mb-1">6. Kalau koneksi gagal terus (kena CORS):</p>
+            <p className="font-bold text-slate-700 mb-1">6. Kalau ada nama yang "gak ketemu di Data Master Guru":</p>
             <p>
-              Beberapa jaringan/kebijakan Google Workspace sekolah bisa memblokir pengambilan data langsung dari
-              browser. Solusinya, arahkan sinkronisasi ini lewat backend Laravel (server-to-server, gak kena batasan
-              CORS) — endpoint contohnya udah disiapkan di backend:{" "}
-              <code className="bg-white px-1 rounded border border-slate-200">GET /api/ketidakhadiran/dari-spreadsheet</code>.
+              Sistem cuma bisa nyambungin baris ketidakhadiran ke guru yang namanya udah terdaftar di halaman{" "}
+              <b>Data Master Guru</b>. Kalau nama di spreadsheet beda ejaan (misal ada tanda titik/gelar yang beda),
+              baris itu bakal dilewatin dan muncul peringatan di bawah tombol Sync. Samain dulu ejaan namanya di kedua
+              tempat, atau tambahin guru itu ke Data Master Guru.
             </p>
           </div>
         </div>

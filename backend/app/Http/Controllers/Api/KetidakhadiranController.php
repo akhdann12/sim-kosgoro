@@ -6,6 +6,7 @@ use App\Http\Controllers\Controller;
 use App\Models\Guru;
 use App\Models\Ketidakhadiran;
 use App\Models\Kehadiran;
+use App\Support\GuruMatcher;
 use Illuminate\Http\Request;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Http;
@@ -33,7 +34,7 @@ class KetidakhadiranController extends Controller
             'hari' => 'required|string|max:20',
             'tanggal' => 'required|date',
             'jam_ke' => 'nullable|string|max:50',
-            'kelas' => 'nullable', // string "X RPL, XI TKJ" atau array
+            'kelas' => 'nullable',
             'kode' => 'required|in:S,I,A,D',
             'pengganti' => 'nullable|string|max:255',
             'catatan' => 'nullable|string|max:255',
@@ -56,7 +57,6 @@ class KetidakhadiranController extends Controller
             'catatan' => $validated['catatan'] ?? null,
         ]);
 
-        // Catatan ketidakhadiran otomatis tercermin juga di rekap kehadiran harian (kalau kode != Alpa tetap tercatat sbg I/S/D, Alpa sbg A)
         Kehadiran::updateOrCreate(
             [
                 'guru_id' => $validated['guru_id'],
@@ -76,17 +76,11 @@ class KetidakhadiranController extends Controller
     /**
      * GET /api/ketidakhadiran/dari-spreadsheet?sheet_id=xxx&gid=0
      *
-     * Proxy server-to-server buat baca Google Spreadsheet publik (Anyone with the link: Viewer)
-     * dan langsung upsert ke tabel ketidakhadiran. Dipakai kalau fetch langsung dari browser
-     * (frontend Next.js) kena CORS/diblokir jaringan sekolah.
-     *
-     * Kolom yang dibaca (header row, urutan bebas):
-     * Nama Guru | Mata Pelajaran | Hari | Tanggal | Jam Ke- | Kelas | Keterangan (S/I/A/D) | Guru Pengganti / Tugas | Keterangan
+     * Baris header dicari otomatis di seluruh baris (bukan asumsi baris pertama), soalnya file
+     * rekap sekolah sering ada judul/subjudul di atas header aslinya.
      */
     public function fromSpreadsheet(Request $request)
     {
-        // Validasi ketat: sheet_id cuma boleh karakter yang emang dipakai Google (huruf/angka/-/_),
-        // gid cuma boleh angka. Ini nutup celah URL/path injection ke endpoint proxy ini.
         $validated = $request->validate([
             'sheet_id' => ['required', 'string', 'regex:/^[a-zA-Z0-9_-]+$/'],
             'gid' => ['nullable', 'regex:/^[0-9]+$/'],
@@ -100,19 +94,44 @@ class KetidakhadiranController extends Controller
             return response()->json(['message' => 'Gagal mengambil spreadsheet. Pastikan sudah di-share sebagai "Anyone with the link".'], 422);
         }
 
-        $rows = array_map('str_getcsv', explode("\n", trim($response->body())));
-        $header = array_map(fn ($h) => $this->normalizeHeader($h), array_shift($rows));
+        $rawRows = array_map('str_getcsv', explode("\n", trim($response->body())));
+
+        $headerRowIndex = null;
+        foreach ($rawRows as $idx => $row) {
+            foreach ($row as $cell) {
+                $norm = $this->normalizeHeader((string) $cell);
+                if (in_array($norm, ['namaguru', 'nama'])) {
+                    $headerRowIndex = $idx;
+                    break 2;
+                }
+            }
+        }
+
+        if ($headerRowIndex === null) {
+            return response()->json(['message' => 'Gak nemu kolom "Nama Guru" di spreadsheet ini. Pastikan ada baris header dengan kolom itu.'], 422);
+        }
+
+        $header = array_map(fn ($h) => $this->normalizeHeader((string) $h), $rawRows[$headerRowIndex]);
+        $dataRows = array_slice($rawRows, $headerRowIndex + 1);
 
         $result = [];
-        foreach ($rows as $rawRow) {
-            if (count($rawRow) < 2) continue;
+        $dilewati = [];
+        $allGuru = Guru::where('aktif', true)->get(); // di-load sekali di luar loop, bukan query tiap baris
+
+        foreach ($dataRows as $rawRow) {
+            if (count(array_filter($rawRow, fn ($c) => trim((string) $c) !== '')) < 2) continue;
             $row = array_combine($header, array_pad($rawRow, count($header), null));
 
             $namaGuru = trim($row['namaguru'] ?? $row['nama'] ?? '');
             if (!$namaGuru) continue;
 
-            $guru = Guru::where('nama', 'like', "%{$namaGuru}%")->first();
-            if (!$guru) continue;
+            // Pencocokan fuzzy (bukan LIKE exact-substring) - toleran typo kecil & beda format
+            // gelar, misal "Laras Dwi Febriyani" tetep ketemu ke "Laras Dwi Febriani" di master.
+            $guru = GuruMatcher::findBestMatch($namaGuru, $allGuru);
+            if (!$guru) {
+                $dilewati[] = $namaGuru;
+                continue;
+            }
 
             $tanggal = $this->parseTanggal($row['tanggal'] ?? null);
             if (!$tanggal) continue;
@@ -142,7 +161,11 @@ class KetidakhadiranController extends Controller
             $result[] = $item->load('guru');
         }
 
-        return response()->json(['synced' => count($result), 'data' => $result]);
+        return response()->json([
+            'synced' => count($result),
+            'data' => $result,
+            'dilewati' => array_values(array_unique($dilewati)),
+        ]);
     }
 
     private function normalizeHeader(string $header): string
@@ -153,7 +176,20 @@ class KetidakhadiranController extends Controller
     private function parseTanggal($value): ?string
     {
         if (!$value) return null;
+        $value = trim((string) $value);
+
         try {
+            // Spreadsheet sekolah biasanya nulis tanggal format Indonesia (d/m/Y atau d-m-Y).
+            // Carbon::parse() polos nebak "10/08/2026" itu FORMAT AMERIKA (m/d/Y = 8 Oktober),
+            // padahal maksudnya 10 Agustus - jadi harus dicoba format Indonesia DULU secara
+            // eksplisit sebelum jatuh ke parser umum, biar tanggalnya gak geser diam-diam.
+            if (preg_match('#^(\d{1,2})[/\-](\d{1,2})[/\-](\d{4})$#', $value, $m)) {
+                $day = (int) $m[1];
+                $month = (int) $m[2];
+                if ($day <= 31 && $month <= 12) {
+                    return Carbon::createFromFormat('d/m/Y', "{$day}/{$month}/{$m[3]}")->format('Y-m-d');
+                }
+            }
             return Carbon::parse($value)->format('Y-m-d');
         } catch (\Throwable $e) {
             return null;

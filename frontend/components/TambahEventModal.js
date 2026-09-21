@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 
-export default function TambahEventModal({ guruList, onClose, onSubmit }) {
+export default function TambahEventModal({ guruList, onClose, onSubmit, saving = false }) {
   const [nama, setNama] = useState("");
   const [tanggal, setTanggal] = useState("");
   const [checked, setChecked] = useState(() => {
@@ -102,8 +102,8 @@ export default function TambahEventModal({ guruList, onClose, onSubmit }) {
           <button type="button" onClick={onClose} className="px-4 py-2 text-xs font-medium text-slate-600 hover:bg-slate-50 rounded border border-slate-200">
             Batal
           </button>
-          <button type="submit" className="px-4 py-2 text-xs font-medium text-white bg-[#1e3a8a] hover:bg-blue-900 rounded shadow-sm">
-            Simpan Kegiatan
+          <button type="submit" disabled={saving} className="px-4 py-2 text-xs font-medium text-white bg-[#1e3a8a] hover:bg-blue-900 rounded shadow-sm disabled:opacity-60">
+            {saving ? "Menyimpan..." : "Simpan Kegiatan"}
           </button>
         </div>
       </form>

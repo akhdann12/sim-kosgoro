@@ -3,7 +3,7 @@
 import { useState } from "react";
 import AppShell from "@/components/AppShell";
 import { useTahunAjaran } from "@/lib/context/TahunAjaranContext";
-import { PERIODE_OPTIONS } from "@/lib/data/generateTaData";
+import { PERIODE_OPTIONS } from "@/lib/periodUtils";
 import { exportRowsToExcel, exportRowsToPDF } from "@/lib/exportUtils";
 
 const predikatBadge = {
@@ -24,12 +24,23 @@ function buildHeadersRows(guruRekap) {
 }
 
 export default function DashboardPage() {
-  const { data, current } = useTahunAjaran();
+  const { data, current, loading, error, refresh } = useTahunAjaran();
   const { summaryCards, guruRekap } = data.dashboard; // default: tampilan tabel tetap pakai rekap satu semester penuh
 
   return (
     <AppShell>
       <div className="flex-1 overflow-y-auto p-4 md:p-6">
+          {loading && (
+            <div className="mb-4 text-xs text-slate-400 flex items-center">
+              <i className="fa-solid fa-spinner fa-spin mr-2"></i> Memuat data dari server...
+            </div>
+          )}
+          {error && (
+            <div className="mb-4 text-xs text-red-600 bg-red-50 border border-red-100 rounded px-3 py-2 flex items-center justify-between">
+              <span><i className="fa-solid fa-circle-exclamation mr-1.5"></i> {error}</span>
+              <button onClick={refresh} className="font-semibold underline">Coba lagi</button>
+            </div>
+          )}
           {/* Page Title & Actions */}
           <div className="flex flex-col md:flex-row justify-between items-start md:items-center mb-6 gap-3">
             <div>

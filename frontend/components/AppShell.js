@@ -1,11 +1,34 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import { useRouter } from "next/navigation";
 import Sidebar, { SidebarContent } from "@/components/Sidebar";
 import Header from "@/components/Header";
+import { useAuth } from "@/lib/context/AuthContext";
 
 export default function AppShell({ children }) {
   const [mobileOpen, setMobileOpen] = useState(false);
+  const { user, checkingSession } = useAuth();
+  const router = useRouter();
+
+  // Kalau belum login (dan udah selesai ngecek token tersimpan), lempar ke halaman login
+  useEffect(() => {
+    if (!checkingSession && !user) {
+      router.replace("/login");
+    }
+  }, [checkingSession, user, router]);
+
+  if (checkingSession) {
+    return (
+      <div className="w-full min-h-screen flex items-center justify-center text-sm text-slate-400">
+        <i className="fa-solid fa-spinner fa-spin mr-2"></i> Memeriksa sesi login...
+      </div>
+    );
+  }
+
+  if (!user) {
+    return null; // lagi di-redirect ke /login
+  }
 
   return (
     <>

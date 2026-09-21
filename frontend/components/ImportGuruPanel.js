@@ -38,26 +38,42 @@ export default function ImportGuruPanel({ onImport }) {
       const buf = await file.arrayBuffer();
       const wb = XLSX.read(buf, { type: "array" });
       const sheet = wb.Sheets[wb.SheetNames[0]];
-      const rawRows = XLSX.utils.sheet_to_json(sheet, { defval: "" });
 
+      // Ambil semua baris mentah dulu (bukan langsung anggap baris 1 = header),
+      // soalnya file rekap sekolah sering ada judul/subjudul di atas header aslinya.
+      const rawRows = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: "" });
       if (!rawRows.length) throw new Error("File kosong atau format tidak terbaca");
 
-      const mapped = rawRows
+      const isHeaderRow = (row) =>
+        row.some((cell) => {
+          const norm = normalizeKey(cell);
+          return norm === "namalengkapguru" || norm === "namalengkap" || norm === "nama";
+        });
+
+      const headerRowIndex = rawRows.findIndex(isHeaderRow);
+      if (headerRowIndex === -1) {
+        throw new Error('Gak nemu kolom "Nama Lengkap Guru" yang valid di file ini. Pastikan ada baris header dengan kolom itu, di posisi manapun di file.');
+      }
+
+      const headerRow = rawRows[headerRowIndex];
+      const dataRows = rawRows.slice(headerRowIndex + 1);
+
+      const mapped = dataRows
         .map((row) => {
           const norm = {};
-          Object.entries(row).forEach(([k, v]) => {
-            const field = FIELD_MAP[normalizeKey(k)];
-            if (field) norm[field] = String(v).trim();
+          headerRow.forEach((h, idx) => {
+            const field = FIELD_MAP[normalizeKey(h)];
+            if (field && row[idx] !== undefined && row[idx] !== "") norm[field] = String(row[idx]).trim();
           });
           return { nama: norm.nama || "", jabatan: norm.jabatan || "", nip: norm.nip || "" };
         })
         .filter((r) => r.nama);
 
       if (!mapped.length) {
-        throw new Error('Gak nemu kolom "Nama Lengkap Guru" yang valid di file ini.');
+        throw new Error("Header ketemu, tapi baris di bawahnya kosong semua. Cek lagi isi file-nya.");
       }
 
-      const { added, updated } = onImport(mapped);
+      const { added, updated } = await onImport(mapped);
       setStatus({
         type: "success",
         message: `${added} guru baru ditambahkan${updated ? `, ${updated} data diperbarui` : ""} dari "${file.name}".`,
@@ -104,7 +120,7 @@ export default function ImportGuruPanel({ onImport }) {
       {showInfo && (
         <div className="border-t border-slate-100 p-4 text-[11px] text-slate-600 space-y-3 bg-slate-50/50 rounded-b-lg">
           <div>
-            <p className="font-bold text-slate-700 mb-1">Struktur kolom yang dibutuhkan (baris pertama = header):</p>
+            <p className="font-bold text-slate-700 mb-1">Struktur kolom yang dibutuhkan (baris header boleh di mana aja di file):</p>
             <div className="flex flex-wrap gap-1.5 mb-2">
               {HEADER_HINTS.map((h) => (
                 <span key={h} className="bg-white border border-slate-200 px-2 py-1 rounded text-slate-600">{h}</span>
@@ -114,7 +130,7 @@ export default function ImportGuruPanel({ onImport }) {
               Persis kaya file rekap data guru yang biasa dipakai: kolom <b>No</b> boleh ada boleh gak (diabaikan sistem),
               kolom <b>NIP / ID</b> boleh dikosongin, yang wajib cuma <b>Nama Lengkap Guru</b> dan{" "}
               <b>Jabatan / Mapel</b> (contoh isinya: "Guru Mapel", "Kepala Sekolah", "Waka. Bid. Kurikulum",
-              "Tenaga Administrasi", dst).
+              "Tenaga Administrasi", dst). Boleh ada judul/subjudul di atas baris header, sistem otomatis nyari baris headernya sendiri.
             </p>
           </div>
           <div>

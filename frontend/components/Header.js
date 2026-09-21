@@ -135,7 +135,6 @@ export default function Header({ onMenuClick }) {
               <div className="absolute right-0 mt-2 w-56 bg-white border border-slate-200 rounded-lg shadow-xl z-40 overflow-hidden">
                 <div className="p-3 border-b border-slate-100">
                   <p className="text-sm font-semibold text-slate-700">{user?.nama}</p>
-                  <p className="text-[11px] text-slate-500">{user?.role}</p>
                   <p className="text-[10px] text-slate-400 mt-0.5">{user?.email}</p>
                 </div>
                 <button

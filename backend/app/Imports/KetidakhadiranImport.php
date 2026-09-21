@@ -4,6 +4,7 @@ namespace App\Imports;
 
 use App\Models\Guru;
 use App\Models\Ketidakhadiran;
+use App\Support\GuruMatcher;
 use Maatwebsite\Excel\Concerns\ToModel;
 use Maatwebsite\Excel\Concerns\WithHeadingRow;
 use Maatwebsite\Excel\Concerns\SkipsEmptyRows;
@@ -26,7 +27,8 @@ class KetidakhadiranImport implements ToModel, WithHeadingRow, SkipsEmptyRows
             return null;
         }
 
-        $guru = Guru::where('nama', 'like', "%{$namaGuru}%")->first();
+        // Pencocokan fuzzy - toleran typo kecil & beda format gelar
+        $guru = GuruMatcher::findBestMatchByQuery($namaGuru);
         if (!$guru) {
             // Guru tidak ada di master data -> skip baris ini biar gak nyasar ke guru yang salah
             return null;
@@ -72,6 +74,17 @@ class KetidakhadiranImport implements ToModel, WithHeadingRow, SkipsEmptyRows
         try {
             if (is_numeric($value)) {
                 return \PhpOffice\PhpSpreadsheet\Shared\Date::excelToDateTimeObject($value)->format('Y-m-d');
+            }
+
+            $value = trim((string) $value);
+            // Format Indonesia (d/m/Y) dicoba dulu secara eksplisit - Carbon::parse() polos
+            // nebak slash-date sebagai format Amerika (m/d/Y), yang bisa geser tanggalnya diam-diam.
+            if (preg_match('#^(\d{1,2})[/\-](\d{1,2})[/\-](\d{4})$#', $value, $m)) {
+                $day = (int) $m[1];
+                $month = (int) $m[2];
+                if ($day <= 31 && $month <= 12) {
+                    return Carbon::createFromFormat('d/m/Y', "{$day}/{$month}/{$m[3]}")->format('Y-m-d');
+                }
             }
             return Carbon::parse($value)->format('Y-m-d');
         } catch (\Throwable $e) {

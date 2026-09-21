@@ -4,6 +4,7 @@ namespace App\Imports;
 
 use App\Models\Guru;
 use App\Models\Kehadiran;
+use App\Support\GuruMatcher;
 use Maatwebsite\Excel\Concerns\ToModel;
 use Maatwebsite\Excel\Concerns\WithHeadingRow;
 use Maatwebsite\Excel\Concerns\SkipsEmptyRows;
@@ -21,9 +22,11 @@ class KehadiranImport implements ToModel, WithHeadingRow, SkipsEmptyRows
 {
     public function model(array $row)
     {
-        // Cari guru berdasarkan NIP, kalau tidak ada coba cocokkan nama
+        // Cari guru berdasarkan NIP dulu, kalau gak ada coba cocokkan nama pakai fuzzy match
+        // (toleran typo kecil & beda format gelar)
+        $namaGuru = trim($row['nama_guru'] ?? '');
         $guru = Guru::where('nip', $row['nip'] ?? null)->first()
-            ?? Guru::where('nama', 'like', '%' . trim($row['nama_guru'] ?? '') . '%')->first();
+            ?? ($namaGuru ? GuruMatcher::findBestMatchByQuery($namaGuru) : null);
 
         if (!$guru) {
             // Guru tidak ditemukan di master data -> skip baris ini
@@ -66,6 +69,17 @@ class KehadiranImport implements ToModel, WithHeadingRow, SkipsEmptyRows
             // Excel kadang kirim serial number tanggal
             if (is_numeric($value)) {
                 return \PhpOffice\PhpSpreadsheet\Shared\Date::excelToDateTimeObject($value)->format('Y-m-d');
+            }
+
+            $value = trim((string) $value);
+            // Format Indonesia (d/m/Y) dicoba dulu secara eksplisit, biar gak ketuker sama
+            // format Amerika (m/d/Y) yang jadi tebakan default Carbon::parse() buat slash-date.
+            if (preg_match('#^(\d{1,2})[/\-](\d{1,2})[/\-](\d{4})$#', $value, $m)) {
+                $day = (int) $m[1];
+                $month = (int) $m[2];
+                if ($day <= 31 && $month <= 12) {
+                    return Carbon::createFromFormat('d/m/Y', "{$day}/{$month}/{$m[3]}")->format('Y-m-d');
+                }
             }
             return Carbon::parse($value)->format('Y-m-d');
         } catch (\Throwable $e) {
