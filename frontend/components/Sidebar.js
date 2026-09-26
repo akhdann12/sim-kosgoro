@@ -4,6 +4,8 @@ import { useState } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useTahunAjaran } from "@/lib/context/TahunAjaranContext";
+import { useAuth } from "@/lib/context/AuthContext";
+import TambahTahunAjaranModal from "@/components/TambahTahunAjaranModal";
 
 const menuKurikulum = [
   { href: "/dashboard", label: "Dashboard", icon: "fa-solid fa-border-all" },
@@ -15,11 +17,30 @@ const menuMaster = [
   { href: "/data-master-guru", label: "Data Master Guru", icon: "fa-solid fa-users-gear" },
 ];
 
+// Cuma super_admin yang boleh liat & buka menu ini
+const menuMasterSuperAdminOnly = [
+  { href: "/manajemen-user", label: "Manajemen Akun", icon: "fa-solid fa-user-shield" },
+];
+
 // Isi sidebar dipisah jadi komponen sendiri supaya bisa dipakai ulang di drawer mobile (lihat AppShell.js)
 export function SidebarContent({ onNavigate }) {
   const pathname = usePathname();
-  const { options, current, setTaId } = useTahunAjaran();
+  const { options, current, setTaId, createTahunAjaran } = useTahunAjaran();
+  const { isSuperAdmin } = useAuth();
   const [taOpen, setTaOpen] = useState(false);
+  const [showTambahTa, setShowTambahTa] = useState(false);
+  const [savingTa, setSavingTa] = useState(false);
+
+  async function handleTambahTa(payload) {
+    setSavingTa(true);
+    try {
+      await createTahunAjaran(payload);
+      setShowTambahTa(false);
+      setTaOpen(false);
+    } finally {
+      setSavingTa(false);
+    }
+  }
 
   return (
     <div className="flex flex-col justify-between h-full">
@@ -40,7 +61,7 @@ export function SidebarContent({ onNavigate }) {
               onClick={() => setTaOpen((v) => !v)}
               className="w-full bg-blue-50 text-blue-700 text-xs font-semibold px-3 py-2 rounded flex justify-between items-center hover:bg-blue-100 transition"
             >
-              <span>{current.label}</span>
+              <span>{current ? current.label : "Belum ada Tahun Ajaran"}</span>
               <i className={`fa-solid fa-chevron-down text-[10px] transition-transform ${taOpen ? "rotate-180" : ""}`}></i>
             </button>
 
@@ -48,6 +69,9 @@ export function SidebarContent({ onNavigate }) {
               <>
                 <div className="fixed inset-0 z-10" onClick={() => setTaOpen(false)}></div>
                 <div className="absolute left-0 right-0 mt-1 bg-white border border-slate-200 rounded-lg shadow-lg z-20 max-h-64 overflow-y-auto py-1">
+                  {options.length === 0 && (
+                    <p className="px-3 py-2 text-[11px] text-slate-400">Belum ada Tahun Ajaran tersimpan.</p>
+                  )}
                   {options.map((opt) => (
                     <button
                       key={opt.id}
@@ -56,17 +80,38 @@ export function SidebarContent({ onNavigate }) {
                         setTaOpen(false);
                       }}
                       className={`w-full text-left px-3 py-2 text-xs hover:bg-blue-50 flex items-center justify-between ${
-                        opt.id === current.id ? "bg-blue-50 text-blue-700 font-semibold" : "text-slate-600"
+                        current && opt.id === current.id ? "bg-blue-50 text-blue-700 font-semibold" : "text-slate-600"
                       }`}
                     >
                       {opt.label}
-                      {opt.id === current.id && <i className="fa-solid fa-check text-[10px]"></i>}
+                      {current && opt.id === current.id && <i className="fa-solid fa-check text-[10px]"></i>}
                     </button>
                   ))}
+                  {isSuperAdmin && (
+                    <div className="border-t border-slate-100 mt-1 pt-1">
+                      <button
+                        onClick={() => {
+                          setShowTambahTa(true);
+                          setTaOpen(false);
+                        }}
+                        className="w-full text-left px-3 py-2 text-xs text-blue-600 hover:bg-blue-50 flex items-center"
+                      >
+                        <i className="fa-solid fa-plus mr-2 w-3 text-center"></i> Tambah Tahun Ajaran
+                      </button>
+                    </div>
+                  )}
                 </div>
               </>
             )}
           </div>
+
+          {showTambahTa && (
+            <TambahTahunAjaranModal
+              onClose={() => setShowTambahTa(false)}
+              onSubmit={handleTambahTa}
+              saving={savingTa}
+            />
+          )}
 
           {/* Menu Kurikulum */}
           <p className="text-[10px] font-bold text-slate-400 uppercase mb-2 tracking-wider">Menu Kurikulum</p>
@@ -93,7 +138,7 @@ export function SidebarContent({ onNavigate }) {
           {/* Master & Pengaturan */}
           <p className="text-[10px] font-bold text-slate-400 uppercase mb-2 tracking-wider">Master & Pengaturan</p>
           <nav className="space-y-1">
-            {menuMaster.map((item) => (
+            {[...menuMaster, ...(isSuperAdmin ? menuMasterSuperAdminOnly : [])].map((item) => (
               <Link key={item.label} href={item.href} onClick={onNavigate} className="flex items-center px-3 py-2.5 text-sm text-slate-600 hover:bg-slate-50 hover:text-slate-900 rounded-md">
                 <i className={`${item.icon} w-6 text-center`}></i> {item.label}
               </Link>

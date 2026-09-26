@@ -8,7 +8,11 @@ class Guru extends Model
 {
     protected $table = 'guru';
 
-    protected $fillable = ['nama', 'nip', 'jabatan', 'mapel', 'aktif'];
+    protected $fillable = ['nama', 'nip', 'jabatan', 'mapel', 'aktif', 'tanggal_bergabung'];
+
+    protected $casts = [
+        'tanggal_bergabung' => 'date',
+    ];
 
     public function kehadiran()
     {

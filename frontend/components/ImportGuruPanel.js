@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
 const HEADER_HINTS = ["No", "NIP / ID", "Nama Lengkap Guru", "Jabatan / Mapel"];
 
@@ -21,10 +21,18 @@ function normalizeKey(k) {
   return String(k).toLowerCase().replace(/[^a-z0-9]/g, "");
 }
 
-export default function ImportGuruPanel({ onImport }) {
+export default function ImportGuruPanel({ onImport, defaultTanggalBergabung = null }) {
   const [showInfo, setShowInfo] = useState(false);
   const [status, setStatus] = useState(null);
   const [loading, setLoading] = useState(false);
+  const [tanggalBergabung, setTanggalBergabung] = useState(defaultTanggalBergabung || "");
+
+  // Kalau lagi mode setup TA (defaultTanggalBergabung dikasih dari parent), field ini otomatis
+  // ke-lock ke tanggal mulai TA yang lagi di-setup - biar semua guru baru dari file ini konsisten.
+  const terkunci = Boolean(defaultTanggalBergabung);
+  useEffect(() => {
+    setTanggalBergabung(defaultTanggalBergabung || "");
+  }, [defaultTanggalBergabung]);
 
   async function handleFile(e) {
     const file = e.target.files?.[0];
@@ -73,10 +81,11 @@ export default function ImportGuruPanel({ onImport }) {
         throw new Error("Header ketemu, tapi baris di bawahnya kosong semua. Cek lagi isi file-nya.");
       }
 
-      const { added, updated } = await onImport(mapped);
+      const { added, updated } = await onImport(mapped, tanggalBergabung || null);
+      const infoTanggal = added && tanggalBergabung ? ` (tanggal bergabung diset ${tanggalBergabung})` : "";
       setStatus({
         type: "success",
-        message: `${added} guru baru ditambahkan${updated ? `, ${updated} data diperbarui` : ""} dari "${file.name}".`,
+        message: `${added} guru baru ditambahkan${infoTanggal}${updated ? `, ${updated} data diperbarui` : ""} dari "${file.name}".`,
       });
     } catch (err) {
       console.error(err);
@@ -108,6 +117,20 @@ export default function ImportGuruPanel({ onImport }) {
             <input type="file" accept=".xlsx,.xls,.csv" className="hidden" onChange={handleFile} disabled={loading} />
           </label>
         </div>
+      </div>
+
+      <div className="px-4 pb-3 flex items-center gap-2">
+        <label className="text-[11px] text-slate-500 whitespace-nowrap">
+          Tanggal bergabung guru baru {terkunci ? "(otomatis dari Tahun Ajaran)" : "(opsional)"}:
+        </label>
+        <input
+          type="date"
+          value={tanggalBergabung}
+          disabled={terkunci}
+          onChange={(e) => setTanggalBergabung(e.target.value)}
+          className="text-[11px] bg-slate-50 border border-slate-200 rounded py-1 px-2 outline-none focus:border-blue-300 disabled:opacity-70 disabled:bg-slate-100"
+        />
+        {terkunci && <i className="fa-solid fa-lock text-slate-300 text-[10px]" title="Terkunci selama mode setup Tahun Ajaran"></i>}
       </div>
 
       {status && (

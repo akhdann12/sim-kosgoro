@@ -3,13 +3,19 @@
 import { useEffect, useState } from "react";
 import AppShell from "@/components/AppShell";
 import TambahEventModal from "@/components/TambahEventModal";
+import ImportEventPanel from "@/components/ImportEventPanel";
+import TahunAjaranEmptyState from "@/components/TahunAjaranEmptyState";
+import TambahTahunAjaranModal from "@/components/TambahTahunAjaranModal";
 import { useTahunAjaran } from "@/lib/context/TahunAjaranContext";
-import { apiPost } from "@/lib/api";
+import { useAuth } from "@/lib/context/AuthContext";
+import { apiPost, apiPut } from "@/lib/api";
 import { exportRowsToExcel, exportMultiSectionPDF } from "@/lib/exportUtils";
 
 const STATUS_OPTIONS = [
   { value: "hadir", label: "Hadir" },
   { value: "izin", label: "Izin" },
+  { value: "sakit", label: "Sakit" },
+  { value: "dinas", label: "Dinas Luar" },
   { value: "alpa", label: "Alpa" },
 ];
 
@@ -17,16 +23,22 @@ const statusSelectClass = {
   hadir: "text-emerald-600 bg-emerald-50 border-emerald-200",
   alpa: "text-red-600 bg-red-50 border-red-200 font-bold",
   izin: "text-blue-600 bg-blue-50 border-blue-200 font-bold",
+  sakit: "text-amber-600 bg-amber-50 border-amber-200 font-bold",
+  dinas: "text-purple-600 bg-purple-50 border-purple-200 font-bold",
 };
 
 export default function PresensiKegiatanPage() {
-  const { data, current, loading, error, refresh } = useTahunAjaran();
+  const { data, current, loading, error, refresh, createTahunAjaran, loadingTaList } = useTahunAjaran();
+  const { isSuperAdmin } = useAuth();
   const [agendaList, setAgendaList] = useState(data.event.agendaList);
   const [guruEvent, setGuruEvent] = useState(data.event.guruEvent);
   const [activeFilter, setActiveFilter] = useState("all"); // "all" | agenda key
   const [showModal, setShowModal] = useState(false);
   const [savingCell, setSavingCell] = useState(null); // "guruId-agendaIdx" pas lagi nyimpen ke server
   const [savingEvent, setSavingEvent] = useState(false);
+  const [showTambahTa, setShowTambahTa] = useState(false);
+  const [editingTanggalIdx, setEditingTanggalIdx] = useState(null); // idx agenda yang lagi diedit tanggalnya
+  const [savingTanggal, setSavingTanggal] = useState(false);
 
   // Sinkron ulang state lokal tiap kali data dari server berubah (ganti TA, abis refresh, dll)
   useEffect(() => {
@@ -55,6 +67,26 @@ export default function PresensiKegiatanPage() {
     }
   }
 
+  // Koreksi tanggal kegiatan yang salah input (takut ke-skip pas awal input) - tanpa perlu
+  // hapus & bikin ulang kegiatannya. Kehadiran yang udah kesimpen buat kegiatan ini ikut
+  // disesuaikan tanggalnya di backend biar konsisten sama rentang periode Dashboard.
+  async function handleUbahTanggalKegiatan(agenda, tanggalBaru) {
+    if (!tanggalBaru || tanggalBaru === agenda.tanggalIso) {
+      setEditingTanggalIdx(null);
+      return;
+    }
+    setSavingTanggal(true);
+    try {
+      await apiPut(`/kegiatan/${agenda.id}`, { tanggal: tanggalBaru });
+      await refresh();
+      setEditingTanggalIdx(null);
+    } catch (err) {
+      alert(err.message || "Gagal mengubah tanggal kegiatan.");
+    } finally {
+      setSavingTanggal(false);
+    }
+  }
+
   async function handleTambahEvent({ nama, tanggal, checked }) {
     setSavingEvent(true);
     try {
@@ -79,6 +111,17 @@ export default function PresensiKegiatanPage() {
     note: ag.hadir === ag.total ? "100% Hadir" : `${ag.total - ag.hadir} Tidak Hadir`,
   }));
 
+  if (!loadingTaList && !current) {
+    return (
+      <AppShell>
+        <TahunAjaranEmptyState onAdd={() => setShowTambahTa(true)} />
+        {showTambahTa && (
+          <TambahTahunAjaranModal onClose={() => setShowTambahTa(false)} onSubmit={createTahunAjaran} />
+        )}
+      </AppShell>
+    );
+  }
+
   return (
     <>
       <AppShell>
@@ -102,21 +145,26 @@ export default function PresensiKegiatanPage() {
             </div>
             <div className="flex items-center space-x-3 mt-4 lg:mt-0 text-sm">
               <span className="flex items-center px-3 py-1.5 bg-white border border-slate-200 rounded text-slate-600">
-                <i className="fa-regular fa-calendar mr-2 text-blue-500"></i> {current.label}
+                <i className="fa-regular fa-calendar mr-2 text-blue-500"></i> {current?.label}
               </span>
-              <button
-                onClick={() => setShowModal(true)}
-                className="flex items-center px-3 py-1.5 bg-[#1e3a8a] text-white rounded font-medium hover:bg-blue-900 shadow-sm"
-              >
-                <i className="fa-solid fa-plus mr-2"></i> Tambah Event Baru
-              </button>
+              {isSuperAdmin && (
+                <button
+                  onClick={() => setShowModal(true)}
+                  className="flex items-center px-3 py-1.5 bg-[#1e3a8a] text-white rounded font-medium hover:bg-blue-900 shadow-sm"
+                >
+                  <i className="fa-solid fa-plus mr-2"></i> Tambah Event Baru
+                </button>
+              )}
             </div>
           </div>
 
           <div className="flex justify-end space-x-4 mb-4 text-sm font-medium">
-            <ExportLogButton agendaList={agendaList} guruEvent={guruEvent} taLabel={current.label} />
-            <CetakRekapButton agendaList={agendaList} guruEvent={guruEvent} taLabel={current.label} />
+            <ExportLogButton agendaList={agendaList} guruEvent={guruEvent} taLabel={current?.label} />
+            <CetakRekapButton agendaList={agendaList} guruEvent={guruEvent} taLabel={current?.label} />
           </div>
+
+          {/* IMPORT EVENT/AGENDA DARI EXCEL - khusus super_admin */}
+          {isSuperAdmin && <ImportEventPanel onImported={refresh} />}
 
           {/* 4 Summary Cards */}
           <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6">
@@ -178,7 +226,7 @@ export default function PresensiKegiatanPage() {
                 <tr className="bg-[#0f172a]">
                   <th colSpan={3} className="p-2"></th>
                   <th colSpan={visibleAgendaIdx.length} className="p-2 text-right text-white text-[10px] uppercase tracking-wider font-semibold pr-6">
-                    <i className="fa-regular fa-calendar-check mr-1 text-slate-300"></i> Agenda Resmi {current.label}
+                    <i className="fa-regular fa-calendar-check mr-1 text-slate-300"></i> Agenda Resmi {current?.label}
                   </th>
                 </tr>
                 <tr className="bg-[#f1f5f9] border-b border-slate-200 text-[11px] text-slate-500 uppercase tracking-wider">
@@ -187,10 +235,29 @@ export default function PresensiKegiatanPage() {
                   <th className="p-3 font-semibold w-56">Jabatan</th>
                   {visibleAgendaIdx.map((idx) => {
                     const a = agendaList[idx];
+                    const isEditing = editingTanggalIdx === idx;
                     return (
-                      <th key={a.key} title={`${a.namaAsli} \u2022 ${a.tanggal}`} className="p-3 font-semibold text-center align-top w-28 cursor-help">
+                      <th key={a.key} title={a.namaAsli} className="p-3 font-semibold text-center align-top w-28">
                         <div className="text-[#1e3a8a] font-bold mb-1">{a.label}</div>
-                        <div className="text-[9px] text-slate-400 mb-1">{a.tanggal}</div>
+                        {isEditing ? (
+                          <input
+                            type="date"
+                            autoFocus
+                            defaultValue={a.tanggalIso}
+                            disabled={savingTanggal}
+                            onBlur={(e) => handleUbahTanggalKegiatan(a, e.target.value)}
+                            onKeyDown={(e) => { if (e.key === "Escape") setEditingTanggalIdx(null); }}
+                            className="text-[9px] normal-case font-normal bg-white border border-blue-300 rounded px-1 py-0.5 mb-1 w-full outline-none"
+                          />
+                        ) : (
+                          <div
+                            className={`text-[9px] text-slate-400 mb-1 normal-case font-normal ${isSuperAdmin ? "cursor-pointer hover:text-blue-600 hover:underline" : ""}`}
+                            title={isSuperAdmin ? "Klik buat ubah tanggal kegiatan ini" : undefined}
+                            onClick={() => isSuperAdmin && setEditingTanggalIdx(idx)}
+                          >
+                            {a.tanggal} {isSuperAdmin && <i className="fa-solid fa-pen text-[7px] ml-0.5 opacity-50"></i>}
+                          </div>
+                        )}
                         <div className={`w-full h-0.5 mb-1 ${a.barClass}`}></div>
                         <div className={`text-[9px] normal-case font-medium ${a.textClass}`}>{a.persen}</div>
                       </th>
@@ -215,6 +282,36 @@ export default function PresensiKegiatanPage() {
                         const s = g.status[idx];
                         const cellKey = `${g.id}-${idx}`;
                         const isSaving = savingCell === cellKey;
+
+                        // Guru yang tanggal bergabungnya SETELAH tanggal kegiatan ini bukan alpa/izin -
+                        // dia memang belum ada di sekolah, jadi gak boleh dianggap tidak hadir juga.
+                        if (s.value === "belum_bergabung") {
+                          return (
+                            <td key={idx} className="p-3 text-center">
+                              <span
+                                className="inline-block text-[10px] font-medium text-slate-400 bg-slate-100 border border-slate-200 rounded px-1.5 py-0.5"
+                                title={`Belum bergabung per ${g.tanggalBergabung || "-"}`}
+                              >
+                                Belum Gabung
+                              </span>
+                            </td>
+                          );
+                        }
+
+                        if (!isSuperAdmin) {
+                          const label = STATUS_OPTIONS.find((o) => o.value === s.value)?.label || s.value;
+                          return (
+                            <td key={idx} className="p-3 text-center">
+                              <span
+                                className={`inline-block text-[11px] font-semibold rounded px-1.5 py-0.5 border ${statusSelectClass[s.value] || ""}`}
+                                title={s.reason || undefined}
+                              >
+                                {label}
+                              </span>
+                            </td>
+                          );
+                        }
+
                         return (
                           <td key={idx} className="p-3 text-center">
                             <div className="inline-flex items-center gap-1">

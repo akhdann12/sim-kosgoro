@@ -37,10 +37,28 @@ class DashboardController extends Controller
         // BUKAN dari jumlah data yang kebetulan ada. Ini yang bikin defaultnya "hadir" kalau
         // gak ada catatan ketidakhadiran sama sekali buat guru itu - sebelumnya total ikut jadi
         // 0 kalau belum ada data ketidakhadiran yang kesimpen, makanya Dashboard kelihatan 0 semua.
-        $totalHariEfektif = ($start && $end) ? $this->hitungHariEfektif($start, $end) : 0;
+        //
+        // TAPI: ini dihitung PER GURU, bukan sama rata buat semua guru. Guru yang baru gabung di
+        // tengah semester (kolom tanggal_bergabung) gak boleh punya "hari efektif" sebelum tanggal
+        // itu - kalau enggak, dia bakal keitung "Hadir" (default) buat hari-hari sebelum dia bahkan
+        // masuk sekolah, bikin persentase kehadirannya kelihatan 100% padahal itu bukan data asli.
+        $rekap = $guruList->map(function (Guru $guru) use ($ketidakhadiranAll, $kegiatanAll, $start, $end) {
+            $mulaiEfektif = $start;
+            if ($guru->tanggal_bergabung && $start && $guru->tanggal_bergabung->format('Y-m-d') > $start) {
+                $mulaiEfektif = $guru->tanggal_bergabung->format('Y-m-d');
+            }
+            // Kalau tanggal bergabungnya malah SETELAH akhir periode yang diminta, guru ini belum
+            // relevan sama sekali di periode itu - hari efektifnya 0 (bukan dianggap 100% Alpa juga).
+            $totalHariEfektif = ($mulaiEfektif && $end && $mulaiEfektif <= $end)
+                ? $this->hitungHariEfektif($mulaiEfektif, $end)
+                : 0;
 
-        $rekap = $guruList->map(function (Guru $guru) use ($ketidakhadiranAll, $kegiatanAll, $totalHariEfektif) {
-            $ketidakhadiranGuru = $ketidakhadiranAll->get($guru->id, collect());
+            $ketidakhadiranGuru = $ketidakhadiranAll->get($guru->id, collect())
+                // jaga-jaga: buang catatan ketidakhadiran yang tanggalnya sebelum guru ini bergabung
+                // (misal kesalahan input / sisa data lama), biar gak ikut kehitung juga
+                ->when($guru->tanggal_bergabung, fn ($q) => $q->filter(
+                    fn ($row) => $row->tanggal->gte($guru->tanggal_bergabung)
+                ));
 
             // Kalau satu guru punya lebih dari satu catatan ketidakhadiran di tanggal yang sama
             // (misal izin di jam 1-4 terus alpa di jam 7-10), ambil yang "terparah" biar gak
@@ -64,7 +82,10 @@ class DashboardController extends Controller
             // Kehadiran event/kegiatan (Presensi Kegiatan) itu obligasi terpisah dari hari
             // ngajar harian, jadi ditambahkan di atas hitungan harian - kalau ada yang alpa/izin
             // di suatu event, itu juga ikut ngurangin persentase di sini.
-            $kegiatanRows = $kegiatanAll->get($guru->id, collect());
+            $kegiatanRows = $kegiatanAll->get($guru->id, collect())
+                ->when($guru->tanggal_bergabung, fn ($q) => $q->filter(
+                    fn ($row) => $row->tanggal->gte($guru->tanggal_bergabung)
+                ));
             $h += $kegiatanRows->where('status', 'H')->count();
             $i += $kegiatanRows->where('status', 'I')->count();
             $s += $kegiatanRows->where('status', 'S')->count();
@@ -78,6 +99,7 @@ class DashboardController extends Controller
                 'nama' => $guru->nama,
                 'nip' => $guru->nip,
                 'jabatan' => $guru->jabatan,
+                'tanggal_bergabung' => $guru->tanggal_bergabung?->format('Y-m-d'),
                 'h' => $h, 'i' => $i, 's' => $s, 'a' => $a,
                 'total' => $total,
                 'persen' => $persen,

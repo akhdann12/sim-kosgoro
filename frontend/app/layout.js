@@ -3,6 +3,7 @@ import { GuruMasterProvider } from "@/lib/context/GuruMasterContext";
 import { TahunAjaranProvider } from "@/lib/context/TahunAjaranContext";
 import { NotificationProvider } from "@/lib/context/NotificationContext";
 import { AuthProvider } from "@/lib/context/AuthContext";
+import { OnboardingProvider } from "@/lib/context/OnboardingContext";
 
 export const metadata = {
   title: "SIM KOSGORO - Kurikulum & Presensi",
@@ -28,7 +29,9 @@ export default function RootLayout({ children }) {
         <AuthProvider>
           <NotificationProvider>
             <GuruMasterProvider>
-              <TahunAjaranProvider>{children}</TahunAjaranProvider>
+              <OnboardingProvider>
+                <TahunAjaranProvider>{children}</TahunAjaranProvider>
+              </OnboardingProvider>
             </GuruMasterProvider>
           </NotificationProvider>
         </AuthProvider>

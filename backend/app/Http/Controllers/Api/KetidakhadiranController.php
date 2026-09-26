@@ -7,6 +7,8 @@ use App\Models\Guru;
 use App\Models\Ketidakhadiran;
 use App\Models\Kehadiran;
 use App\Support\GuruMatcher;
+use App\Support\GridAbsensiParser;
+use App\Support\SpreadsheetReader;
 use Illuminate\Http\Request;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Http;
@@ -165,6 +167,99 @@ class KetidakhadiranController extends Controller
             'synced' => count($result),
             'data' => $result,
             'dilewati' => array_values(array_unique($dilewati)),
+        ]);
+    }
+
+    /**
+     * POST /api/ketidakhadiran/import-grid (multipart, field "file")
+     *
+     * Import dari format Excel/Spreadsheet ASLI yang dipakai sekolah (bukan tabel panjang):
+     * baris = guru, kolom = tanggal (dropdown isi jumlah jam), dan baris "Keterangan" bebas teks
+     * di paling bawah. Guru sering nulis ketidakhadirannya di baris Keterangan itu, bukan di
+     * cell dropdown yang seharusnya - endpoint ini otomatis membaca kedua sumber itu dan
+     * "menembak" langsung ke kolom tanggal & guru yang tepat berdasarkan nama yang disebut di teks.
+     */
+    public function importGrid(Request $request)
+    {
+        $validated = $request->validate([
+            'file' => 'required|file|mimes:xlsx,xls,csv,txt',
+        ]);
+
+        try {
+            $rows = SpreadsheetReader::readRows($validated['file']);
+        } catch (\RuntimeException $e) {
+            return response()->json(['message' => $e->getMessage()], 422);
+        }
+
+        return $this->prosesGrid($rows);
+    }
+
+    /**
+     * GET /api/ketidakhadiran/dari-spreadsheet-grid?sheet_id=xxx&gid=0
+     * Sama seperti importGrid, tapi sumbernya Google Spreadsheet (link yang di-share publik),
+     * dipakai buat panel "Sinkronisasi dari Google Spreadsheet" format grid.
+     */
+    public function fromSpreadsheetGrid(Request $request)
+    {
+        $validated = $request->validate([
+            'sheet_id' => ['required', 'string', 'regex:/^[a-zA-Z0-9_-]+$/'],
+            'gid' => ['nullable', 'regex:/^[0-9]+$/'],
+        ]);
+
+        $gid = $validated['gid'] ?? '0';
+        $csvUrl = "https://docs.google.com/spreadsheets/d/{$validated['sheet_id']}/gviz/tq?tqx=out:csv&gid={$gid}";
+
+        $response = Http::timeout(15)->get($csvUrl);
+        if (!$response->successful()) {
+            return response()->json(['message' => 'Gagal mengambil spreadsheet. Pastikan sudah di-share sebagai "Anyone with the link".'], 422);
+        }
+
+        $rows = array_map('str_getcsv', explode("\n", trim($response->body())));
+
+        return $this->prosesGrid($rows);
+    }
+
+    private function prosesGrid(array $rows): \Illuminate\Http\JsonResponse
+    {
+        $guruList = Guru::where('aktif', true)->get();
+        $hasil = GridAbsensiParser::parse($rows, $guruList);
+
+        if (isset($hasil['ringkasan']['error'])) {
+            return response()->json(['message' => $hasil['ringkasan']['error']], 422);
+        }
+
+        $disimpan = [];
+        foreach ($hasil['records'] as $r) {
+            $item = Ketidakhadiran::updateOrCreate(
+                [
+                    'guru_id' => $r['guru_id'],
+                    'tanggal' => $r['tanggal'],
+                ],
+                [
+                    'hari' => Carbon::parse($r['tanggal'])->translatedFormat('l'),
+                    'jam_ke' => $r['jam'] ? "{$r['jam']} Jam" : null,
+                    'kode' => $r['kode'],
+                    'guru_pengganti' => $r['guru_pengganti'],
+                    'catatan' => $r['catatan'],
+                ]
+            );
+
+            Kehadiran::updateOrCreate(
+                ['guru_id' => $r['guru_id'], 'tanggal' => $r['tanggal'], 'kegiatan_id' => null],
+                [
+                    'status' => $r['kode'] === 'D' ? 'I' : $r['kode'],
+                    'keterangan' => $r['catatan'],
+                    'sumber' => 'excel_sync',
+                ]
+            );
+
+            $disimpan[] = $item->load('guru');
+        }
+
+        return response()->json([
+            'synced' => count($disimpan),
+            'data' => $disimpan,
+            'ringkasan' => $hasil['ringkasan'],
         ]);
     }
 

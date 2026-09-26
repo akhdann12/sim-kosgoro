@@ -121,7 +121,7 @@ export default function Header({ onMenuClick }) {
           >
             <div className="text-right mr-3 hidden md:block">
               <p className="text-sm font-semibold text-slate-700 leading-none">{user?.nama?.split(",")[0] || "Tamu"},</p>
-              <p className="text-xs text-slate-500 mt-1">{user?.nama?.split(",")[1]?.trim() || ""}</p>
+              <p className="text-xs text-slate-500 mt-1">{user?.role === "admin" ? "Admin (View Only)" : "Super Admin"}</p>
             </div>
             <div className="w-9 h-9 bg-[#1e3a8a] rounded-full flex items-center justify-center text-white font-bold text-sm shrink-0">
               {user?.initial || "?"}
@@ -136,6 +136,9 @@ export default function Header({ onMenuClick }) {
                 <div className="p-3 border-b border-slate-100">
                   <p className="text-sm font-semibold text-slate-700">{user?.nama}</p>
                   <p className="text-[10px] text-slate-400 mt-0.5">{user?.email}</p>
+                  <span className={`inline-block mt-1.5 text-[9px] font-bold uppercase px-1.5 py-0.5 rounded ${user?.role === "admin" ? "bg-slate-100 text-slate-500" : "bg-blue-50 text-blue-700"}`}>
+                    {user?.role === "admin" ? "Admin \u2022 View Only" : "Super Admin"}
+                  </span>
                 </div>
                 <button
                   onClick={() => {

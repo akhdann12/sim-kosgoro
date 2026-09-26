@@ -2,8 +2,8 @@
 // Dipakai baik waktu data pertama di-fetch, maupun waktu status diedit manual di tabel
 // (biar angka rekapnya konsisten di kedua jalur itu).
 
-const STATUS_FROM_BACKEND = { H: "hadir", I: "izin", A: "alpa", S: "hadir" };
-const STATUS_TO_BACKEND = { hadir: "H", izin: "I", alpa: "A" };
+const STATUS_FROM_BACKEND = { H: "hadir", I: "izin", A: "alpa", S: "sakit", D: "dinas" };
+const STATUS_TO_BACKEND = { hadir: "H", izin: "I", alpa: "A", sakit: "S", dinas: "D" };
 
 export function statusFromBackend(kode) {
   return STATUS_FROM_BACKEND[kode] || "hadir";
@@ -15,8 +15,11 @@ export function statusToBackend(value) {
 
 export function computeAgendaList(agendaBase, guruEvent) {
   return agendaBase.map((ag, idx) => {
-    const hadir = guruEvent.filter((g) => g.status[idx]?.value === "hadir").length;
-    const total = guruEvent.length;
+    // Guru yang "belum_bergabung" pas tanggal agenda ini gak dihitung sama sekali (bukan hadir,
+    // bukan juga tidak hadir) - dia memang belum ada di sekolah, jangan ikut nurunin persentase.
+    const relevan = guruEvent.filter((g) => g.status[idx]?.value !== "belum_bergabung");
+    const hadir = relevan.filter((g) => g.status[idx]?.value === "hadir").length;
+    const total = relevan.length;
     const tidakHadir = total - hadir;
     const persenNum = total > 0 ? Math.round((hadir / total) * 1000) / 10 : 0;
     return {
@@ -30,7 +33,10 @@ export function computeAgendaList(agendaBase, guruEvent) {
 }
 
 export function computeEventSummary(agendaList, guruEvent) {
-  const totalHadirPenuh = guruEvent.filter((g) => g.status.every((s) => s.value === "hadir")).length;
+  // "belum_bergabung" dianggap netral di sini - guru yang semua kehadirannya (yang relevan,
+  // sejak dia gabung) selalu Hadir tetap dihitung disiplin penuh, gak digagalkan cuma karena
+  // ada agenda sebelum dia masuk sekolah.
+  const totalHadirPenuh = guruEvent.filter((g) => g.status.every((s) => s.value === "hadir" || s.value === "belum_bergabung")).length;
   const guruDenganAlpa = guruEvent.filter((g) => g.status.filter((s) => s.value === "alpa").length >= 1);
   const totalSlot = agendaList.reduce((sum, a) => sum + a.total, 0);
   const totalHadirSlot = agendaList.reduce((sum, a) => sum + a.hadir, 0);

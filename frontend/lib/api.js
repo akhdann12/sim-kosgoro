@@ -57,6 +57,45 @@ export async function apiPost(path, body = {}) {
   return res.json();
 }
 
+export async function apiPut(path, body = {}) {
+  const res = await fetch(`/api${path}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json", ...authHeaders() },
+    body: JSON.stringify(body),
+  });
+  if (res.status === 401) {
+    handleUnauthorized();
+    throw new Error("Sesi login habis, silakan login ulang.");
+  }
+  if (!res.ok) {
+    const errBody = await res.json().catch(() => ({}));
+    throw new Error(errBody.message || `Gagal memperbarui data: ${path}`);
+  }
+  return res.json();
+}
+
+// Upload file (multipart/form-data) - dipakai buat import Excel yang parsing-nya dilakukan di
+// backend (bukan di browser), misal format grid ketidakhadiran (guru x tanggal + baris Keterangan).
+export async function apiUploadFile(path, file, fieldName = "file") {
+  const formData = new FormData();
+  formData.append(fieldName, file);
+
+  const res = await fetch(`/api${path}`, {
+    method: "POST",
+    headers: { ...authHeaders() },
+    body: formData,
+  });
+  if (res.status === 401) {
+    handleUnauthorized();
+    throw new Error("Sesi login habis, silakan login ulang.");
+  }
+  if (!res.ok) {
+    const errBody = await res.json().catch(() => ({}));
+    throw new Error(errBody.message || `Gagal upload file: ${path}`);
+  }
+  return res.json();
+}
+
 export async function apiDelete(path) {
   const res = await fetch(`/api${path}`, {
     method: "DELETE",

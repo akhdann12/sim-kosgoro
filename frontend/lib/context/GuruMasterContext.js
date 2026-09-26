@@ -1,7 +1,7 @@
 "use client";
 
 import { createContext, useContext, useEffect, useState, useCallback } from "react";
-import { apiGet, apiPost, apiDelete } from "@/lib/api";
+import { apiGet, apiPost, apiPut, apiDelete } from "@/lib/api";
 import { useAuth } from "@/lib/context/AuthContext";
 
 const GuruMasterContext = createContext(null);
@@ -32,8 +32,15 @@ export function GuruMasterProvider({ children }) {
     else setLoading(false);
   }, [user, refresh]);
 
-  async function addGuru({ nama, jabatan, mapel, nip }) {
-    await apiPost("/guru", { nama, jabatan, mapel: mapel || null, nip: nip || null });
+  async function addGuru({ nama, jabatan, mapel, nip, tanggal_bergabung }) {
+    await apiPost("/guru", { nama, jabatan, mapel: mapel || null, nip: nip || null, tanggal_bergabung: tanggal_bergabung || null });
+    await refresh();
+  }
+
+  // Dipakai buat set/ubah tanggal_bergabung guru (guru yang gabung di tengah semester) atau
+  // data lain tanpa harus lewat form tambah - misal langsung dari kolom di tabel Data Master Guru.
+  async function updateGuru(id, payload) {
+    await apiPut(`/guru/${id}`, payload);
     await refresh();
   }
 
@@ -43,14 +50,16 @@ export function GuruMasterProvider({ children }) {
   }
 
   // rows: [{ nama, jabatan, nip }] - hasil parsing Excel/CSV di frontend, dikirim ke backend buat di-upsert
-  async function importGuru(rows) {
-    const result = await apiPost("/guru/import", { rows });
+  // tanggalBergabungDefault (opsional): dipakai HANYA buat guru yang beneran baru dibikin dari
+  // import ini (biasanya = tanggal mulai Tahun Ajaran pas mode setup awal aktif).
+  async function importGuru(rows, tanggalBergabungDefault = null) {
+    const result = await apiPost("/guru/import", { rows, tanggal_bergabung_default: tanggalBergabungDefault });
     await refresh();
     return result; // { added, updated }
   }
 
   return (
-    <GuruMasterContext.Provider value={{ guruList, loading, error, addGuru, removeGuru, importGuru, refresh }}>
+    <GuruMasterContext.Provider value={{ guruList, loading, error, addGuru, updateGuru, removeGuru, importGuru, refresh }}>
       {children}
     </GuruMasterContext.Provider>
   );

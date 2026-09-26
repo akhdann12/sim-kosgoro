@@ -1,22 +1,8 @@
-// Util murni buat urusan Tahun Ajaran & rentang tanggal periode (minggu/bulan/3 bulan/semester).
-// Gak ada data fiktif di sini - cuma perhitungan tanggal, dipakai buat nentuin query
-// start/end yang dikirim ke backend (GET /api/dashboard/rekap?start=...&end=...).
-
-export function taOptions() {
-  const years = [2026, 2025, 2024, 2023];
-  const opts = [];
-  years.forEach((y) => {
-    ["ganjil", "genap"].forEach((sem) => {
-      opts.push({
-        id: `${y}-${sem}`,
-        label: `TA ${y}/${y + 1} \u2022 ${sem.toUpperCase()}`,
-        tahun: `${y}/${y + 1}`,
-        semester: sem,
-      });
-    });
-  });
-  return opts;
-}
+// Util murni buat urusan rentang tanggal periode (minggu/bulan/3 bulan/semester) di dalam SATU
+// Tahun Ajaran yang lagi dipilih user. Gak ada data tahun ajaran statis di sini lagi - daftar
+// tahun ajaran & tanggal mulai/selesainya sekarang 100% berasal dari database (lihat
+// TahunAjaranContext.js yang fetch dari GET /api/tahun-ajaran), user yang bikin sendiri lewat
+// halaman "Tambah Tahun Ajaran".
 
 export const PERIODE_OPTIONS = [
   { key: "week", label: "Minggu Ini" },
@@ -35,44 +21,24 @@ function toISODate(d) {
   return d.toISOString().slice(0, 10);
 }
 
-// Ganjil = 1 Jul - 31 Des tahun berjalan, Genap = 1 Jan - 30 Jun tahun setelahnya
-export function semesterBounds(year, isGanjil) {
-  if (isGanjil) return { start: new Date(year, 6, 1), end: new Date(year, 11, 31) };
-  return { start: new Date(year + 1, 0, 1), end: new Date(year + 1, 5, 30) };
-}
-
-// Tanggal mulai efektif data beneran per TA, kalau beda dari awal semester "teoretis" di atas
-// (misal: sekolah baru mulai catat data mulai pertengahan bulan). Tambahin baris baru di sini
-// tiap ada TA baru yang datanya gak mulai persis dari 1 Juli / 1 Januari.
-const TA_EFFECTIVE_START_OVERRIDE = {
-  "2026-ganjil": new Date(2026, 6, 22), // data mulai dicatat dari 22 Juli 2026
-};
-
-function getEffectiveSemesterBounds(taId, year, isGanjil) {
-  const bounds = semesterBounds(year, isGanjil);
-  const override = TA_EFFECTIVE_START_OVERRIDE[taId];
-  if (override && override > bounds.start) {
-    return { start: override, end: bounds.end };
-  }
-  return bounds;
-}
-
 function clipDate(date, min, max) {
   if (date < min) return new Date(min);
   if (date > max) return new Date(max);
   return date;
 }
 
-export function getPeriodRange(taId, period) {
-  const [yearStr, semester] = taId.split("-");
-  const year = Number(yearStr);
-  const isGanjil = semester === "ganjil";
-  const { start: semStart, end: semEnd } = getEffectiveSemesterBounds(taId, year, isGanjil);
+// semStart & semEnd: Date, diambil LANGSUNG dari record Tahun Ajaran yang dipilih user
+// (tanggal_mulai / tanggal_selesai) - bukan dihitung dari rumus/tebakan kalender lagi.
+export function getPeriodRange(semStart, semEnd, period) {
   const today = new Date();
   const referenceEnd = today >= semStart && today <= semEnd ? today : semEnd;
 
   if (period === "semester") {
-    return { start: semStart, end: semEnd, startLabel: fmtDate(semStart), endLabel: fmtDate(semEnd), startISO: toISODate(semStart), endISO: toISODate(semEnd) };
+    return {
+      start: semStart, end: semEnd,
+      startLabel: fmtDate(semStart), endLabel: fmtDate(semEnd),
+      startISO: toISODate(semStart), endISO: toISODate(semEnd),
+    };
   }
 
   let start = new Date(referenceEnd);

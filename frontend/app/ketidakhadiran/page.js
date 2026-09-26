@@ -2,8 +2,11 @@
 
 import { useEffect, useState } from "react";
 import AppShell from "@/components/AppShell";
-import GoogleSheetSyncPanel from "@/components/GoogleSheetSyncPanel";
+import GridKetidakhadiranImportPanel from "@/components/GridKetidakhadiranImportPanel";
+import TahunAjaranEmptyState from "@/components/TahunAjaranEmptyState";
+import TambahTahunAjaranModal from "@/components/TambahTahunAjaranModal";
 import { useTahunAjaran } from "@/lib/context/TahunAjaranContext";
+import { useAuth } from "@/lib/context/AuthContext";
 import { apiGet, apiPost } from "@/lib/api";
 import { mapBackendRow } from "@/lib/ketidakhadiranUtils";
 
@@ -19,12 +22,14 @@ const todayStr = new Date().toLocaleDateString("id-ID");
 const todayISO = new Date().toISOString().slice(0, 10);
 
 export default function KetidakhadiranPage() {
-  const { data, current } = useTahunAjaran();
+  const { data, current, createTahunAjaran, loadingTaList } = useTahunAjaran();
+  const { isSuperAdmin } = useAuth();
   const { guruList } = data;
 
   const [daftar, setDaftar] = useState([]);
   const [loadingDaftar, setLoadingDaftar] = useState(true);
   const [submitting, setSubmitting] = useState(false);
+  const [showTambahTa, setShowTambahTa] = useState(false);
 
   // Begitu halaman dibuka, langsung tampilin data yang UDAH TERSIMPAN di database (cepat,
   // gak perlu nunggu fetch ke Google Sheets dulu). Sinkronisasi live di panel bawah tetep
@@ -95,12 +100,23 @@ export default function KetidakhadiranPage() {
   }
 
   const summaryCards = [
-    { label: "Total Insiden", icon: "fa-regular fa-clipboard", iconClass: "text-blue-500", borderClass: "border-l-blue-600", value: String(daftar.length), unit: "Catatan", note: `Periode ${current.label}` },
+    { label: "Total Insiden", icon: "fa-regular fa-clipboard", iconClass: "text-blue-500", borderClass: "border-l-blue-600", value: String(daftar.length), unit: "Catatan", note: `Periode ${current?.label}` },
     { label: "Guru Sakit (S)", icon: "fa-solid fa-briefcase-medical", iconClass: "text-amber-500", borderClass: "border-l-amber-500", value: String(daftar.filter((d) => d.status === "S").length), unit: "Kasus", note: "Rekap otomatis dari jurnal harian" },
     { label: "Guru Izin (I)", icon: "fa-regular fa-calendar-minus", iconClass: "text-blue-500", borderClass: "border-l-blue-400", value: String(daftar.filter((d) => d.status === "I").length), unit: "Kasus", note: "Kepentingan dinas & keluarga" },
     { label: "Guru Alpa (A)", icon: "fa-solid fa-user-xmark", iconClass: "text-red-500", borderClass: "border-l-red-500", value: String(daftar.filter((d) => d.status === "A").length), unit: "Kasus", note: "Perlu tindak lanjut Waka Kurikulum" },
     { label: "Dinas Luar (D)", icon: "fa-solid fa-briefcase", iconClass: "text-purple-500", borderClass: "border-l-purple-500", value: String(daftar.filter((d) => d.status === "D").length), unit: "Kasus", note: "Tugas / undangan dinas resmi" },
   ];
+
+  if (!loadingTaList && !current) {
+    return (
+      <AppShell>
+        <TahunAjaranEmptyState onAdd={() => setShowTambahTa(true)} />
+        {showTambahTa && (
+          <TambahTahunAjaranModal onClose={() => setShowTambahTa(false)} onSubmit={createTahunAjaran} />
+        )}
+      </AppShell>
+    );
+  }
 
   return (
     <AppShell>
@@ -110,7 +126,7 @@ export default function KetidakhadiranPage() {
             <div>
               <h2 className="text-2xl font-bold text-slate-800 mb-1">Data Ketidakhadiran Guru Mengajar & Pengganti (Inval)</h2>
               <p className="text-xs text-slate-500">
-                SMK Kosgoro Kota Bogor &bull; {current.label} &bull; Rekapitulasi Presensi & Disposisi Penugasan Kelas
+                SMK Kosgoro Kota Bogor &bull; {current?.label} &bull; Rekapitulasi Presensi & Disposisi Penugasan Kelas
               </p>
             </div>
           </div>
@@ -134,19 +150,19 @@ export default function KetidakhadiranPage() {
             ))}
           </div>
 
-          {/* SINKRONISASI GOOGLE SPREADSHEET (live sync) */}
-          <GoogleSheetSyncPanel
-            onImport={() => {
-              // Sengaja refetch dari /api/ketidakhadiran (bukan langsung pakai hasil sync),
-              // biar entri yang ditambah manual lewat form input cepat gak ketimpa/ilang
-              // dari tampilan - daftar selalu nyerminin isi database yang paling lengkap.
-              apiGet("/ketidakhadiran")
-                .then((rows) => setDaftar(rows.map(mapBackendRow)))
-                .catch((err) => console.error("Gagal refresh data ketidakhadiran:", err));
-            }}
-          />
+          {/* IMPORT FORMAT GRID ASLI SEKOLAH (guru x tanggal + baris Keterangan bebas teks) - khusus super_admin */}
+          {isSuperAdmin && (
+            <GridKetidakhadiranImportPanel
+              onImport={() => {
+                apiGet("/ketidakhadiran")
+                  .then((rows) => setDaftar(rows.map(mapBackendRow)))
+                  .catch((err) => console.error("Gagal refresh data ketidakhadiran:", err));
+              }}
+            />
+          )}
 
-          {/* FAST INPUT FORM */}
+          {/* FAST INPUT FORM - khusus super_admin */}
+          {isSuperAdmin && (
           <form onSubmit={submitForm} className="bg-white border border-slate-200 rounded-lg shadow-sm mb-6">
             <div className="p-4 border-b border-slate-100 flex justify-between items-center bg-slate-50/50 rounded-t-lg">
               <div className="flex items-center space-x-3">
@@ -223,13 +239,14 @@ export default function KetidakhadiranPage() {
               </div>
             </div>
           </form>
+          )}
 
           {/* TABLE SECTION */}
           <div className="bg-white border border-slate-200 rounded-lg shadow-sm">
             <div className="p-4 border-b border-slate-100 flex flex-col md:flex-row justify-between items-start md:items-center bg-white rounded-t-lg space-y-3 md:space-y-0">
               <div className="flex items-center space-x-2">
                 <h4 className="font-bold text-slate-800 text-sm">Daftar Rekapitulasi Sesuai Buku Jurnal Kurikulum</h4>
-                <span className="bg-blue-50 text-blue-600 text-[10px] px-2 py-0.5 rounded font-medium border border-blue-100">{current.semester === "ganjil" ? "Semester Ganjil" : "Semester Genap"}</span>
+                <span className="bg-blue-50 text-blue-600 text-[10px] px-2 py-0.5 rounded font-medium border border-blue-100">{current?.semester === "ganjil" ? "Semester Ganjil" : "Semester Genap"}</span>
               </div>
             </div>
 
@@ -302,14 +319,14 @@ export default function KetidakhadiranPage() {
             </div>
 
             <div className="p-4 border-t border-slate-100 bg-white flex justify-between items-center rounded-b-lg">
-              <div className="text-[11px] text-slate-400">Menampilkan {daftar.length} catatan jurnal KBM {current.label}</div>
+              <div className="text-[11px] text-slate-400">Menampilkan {daftar.length} catatan jurnal KBM {current?.label}</div>
             </div>
           </div>
 
           {/* Global Footer Info */}
           <div className="mt-4 flex flex-col md:flex-row justify-between items-center text-[10px] text-slate-500 bg-white p-3 rounded border border-slate-200 shadow-sm">
             <div className="flex items-center">
-              <i className="fa-solid fa-circle-info mr-2 text-slate-400"></i> Perekaman data inval dan ketidakhadiran disinkronkan langsung dengan Jurnal KBM Harian SMK Kosgoro {current.label}.
+              <i className="fa-solid fa-circle-info mr-2 text-slate-400"></i> Perekaman data inval dan ketidakhadiran disinkronkan langsung dengan Jurnal KBM Harian SMK Kosgoro {current?.label}.
             </div>
             <div className="flex items-center mt-2 md:mt-0 space-x-4">
               <div>

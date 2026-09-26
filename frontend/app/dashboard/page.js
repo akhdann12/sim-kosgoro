@@ -2,6 +2,8 @@
 
 import { useState } from "react";
 import AppShell from "@/components/AppShell";
+import TahunAjaranEmptyState from "@/components/TahunAjaranEmptyState";
+import TambahTahunAjaranModal from "@/components/TambahTahunAjaranModal";
 import { useTahunAjaran } from "@/lib/context/TahunAjaranContext";
 import { PERIODE_OPTIONS } from "@/lib/periodUtils";
 import { exportRowsToExcel, exportRowsToPDF } from "@/lib/exportUtils";
@@ -24,8 +26,20 @@ function buildHeadersRows(guruRekap) {
 }
 
 export default function DashboardPage() {
-  const { data, current, loading, error, refresh } = useTahunAjaran();
+  const { data, current, loading, error, refresh, createTahunAjaran, loadingTaList } = useTahunAjaran();
   const { summaryCards, guruRekap } = data.dashboard; // default: tampilan tabel tetap pakai rekap satu semester penuh
+  const [showTambahTa, setShowTambahTa] = useState(false);
+
+  if (!loadingTaList && !current) {
+    return (
+      <AppShell>
+        <TahunAjaranEmptyState onAdd={() => setShowTambahTa(true)} />
+        {showTambahTa && (
+          <TambahTahunAjaranModal onClose={() => setShowTambahTa(false)} onSubmit={createTahunAjaran} />
+        )}
+      </AppShell>
+    );
+  }
 
   return (
     <AppShell>
@@ -46,15 +60,15 @@ export default function DashboardPage() {
             <div>
               <h2 className="text-2xl font-bold text-[#1e3a8a] mb-1">Rekapitulasi Kehadiran Guru Mengajar</h2>
               <p className="text-xs text-slate-500">
-                Tahun Ajaran {current.tahun} &bull; Pemantauan Beban & Disiplin Akademik SMKS Kosgoro Kota Bogor
+                Tahun Ajaran {current?.tahun} &bull; Pemantauan Beban & Disiplin Akademik SMKS Kosgoro Kota Bogor
               </p>
             </div>
             <div className="flex flex-wrap items-center gap-2 text-sm">
               <span className="flex items-center px-3 py-2 bg-white border border-slate-200 rounded text-slate-600">
-                <i className="fa-regular fa-calendar mr-2 text-slate-400"></i> {current.label}
+                <i className="fa-regular fa-calendar mr-2 text-slate-400"></i> {current?.label}
               </span>
-              <ExportButton dashboardByPeriod={data.dashboardByPeriod} periodRanges={data.periodRanges} taLabel={current.label} />
-              <CetakLaporanButton dashboardByPeriod={data.dashboardByPeriod} periodRanges={data.periodRanges} taLabel={current.label} />
+              <ExportButton dashboardByPeriod={data.dashboardByPeriod} periodRanges={data.periodRanges} taLabel={current?.label} />
+              <CetakLaporanButton dashboardByPeriod={data.dashboardByPeriod} periodRanges={data.periodRanges} taLabel={current?.label} />
             </div>
           </div>
 
