@@ -47,8 +47,16 @@ class KegiatanController extends Controller
         $guruList = Guru::where('aktif', true)->get();
         $kegiatanList = Kegiatan::orderBy('tanggal')->get();
 
-        $matrix = $guruList->map(function (Guru $guru) use ($kegiatanList) {
-            $statusPerKegiatan = $kegiatanList->map(function (Kegiatan $k) use ($guru) {
+        // PENTING: jangan query Kehadiran satu-satu di dalam loop guru x kegiatan (N+1) - dengan
+        // 31 guru x sekian kegiatan itu bisa jadi ratusan query terpisah ke Supabase, gampang lemot
+        // atau timeout begitu datanya makin banyak. Ambil SEKALI semua baris yang relevan, terus
+        // di-lookup dari memori (jauh lebih cepat & jumlah query-nya fix cuma 1).
+        $kehadiranByKey = Kehadiran::whereIn('kegiatan_id', $kegiatanList->pluck('id'))
+            ->get()
+            ->keyBy(fn ($row) => "{$row->guru_id}|{$row->kegiatan_id}");
+
+        $matrix = $guruList->map(function (Guru $guru) use ($kegiatanList, $kehadiranByKey) {
+            $statusPerKegiatan = $kegiatanList->map(function (Kegiatan $k) use ($guru, $kehadiranByKey) {
                 // Guru yang gabung belakangan gak boleh dianggap "Hadir" di kegiatan yang tanggalnya
                 // sebelum dia resmi bergabung - itu bukan alpa juga (dia memang belum ada di sekolah),
                 // jadi ditandai status khusus "belum_bergabung" biar gak ikut ngurangin persentase.
@@ -56,7 +64,7 @@ class KegiatanController extends Controller
                     return ['status' => 'belum_bergabung', 'reason' => null];
                 }
 
-                $row = Kehadiran::where('guru_id', $guru->id)->where('kegiatan_id', $k->id)->first();
+                $row = $kehadiranByKey->get("{$guru->id}|{$k->id}");
                 return [
                     'status' => $row ? $row->status : 'H', // default Hadir kalau belum ada catatan
                     'reason' => $row ? $row->keterangan : null,

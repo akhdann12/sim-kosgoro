@@ -89,11 +89,17 @@ export function TahunAjaranProvider({ children }) {
     }
     setLoading(true);
     setError(null);
-    try {
-      const semStart = new Date(current.raw.tanggal_mulai);
-      const semEnd = new Date(current.raw.tanggal_selesai);
 
-      // --- Dashboard: fetch rekap per periode (minggu/bulan/3 bulan/semester) ---
+    // PENTING: Dashboard (rekap per periode) dan Presensi Kegiatan (matrix) di-fetch SECARA
+    // TERPISAH (bukan satu try/catch besar) - kalau salah satu gagal (misal lagi lemot/timeout),
+    // yang lain tetap kesimpen & ketampil. Sebelumnya satu gagal bikin SEMUANYA keliatan kosong,
+    // padahal yang lain sebenarnya berhasil - bikin bingung pas debug.
+    const gagal = [];
+    const semStart = new Date(current.raw.tanggal_mulai);
+    const semEnd = new Date(current.raw.tanggal_selesai);
+
+    // --- Dashboard: fetch rekap per periode (minggu/bulan/3 bulan/semester) ---
+    try {
       const ranges = {};
       const byPeriod = {};
       for (const p of PERIODE_OPTIONS) {
@@ -104,8 +110,13 @@ export function TahunAjaranProvider({ children }) {
       }
       setPeriodRanges(ranges);
       setDashboardByPeriod(byPeriod);
+    } catch (err) {
+      console.error("Gagal memuat /dashboard/rekap:", err);
+      gagal.push("Dashboard");
+    }
 
-      // --- Presensi Kegiatan: fetch matrix guru x agenda ---
+    // --- Presensi Kegiatan: fetch matrix guru x agenda ---
+    try {
       const matrixRes = await apiGet("/kegiatan/matrix");
       const agendaBase = (matrixRes.kegiatan || []).map((k) => ({
         key: `agenda-${k.id}`, id: k.id, label: String(k.nama).toUpperCase(), namaAsli: k.nama,
@@ -127,11 +138,14 @@ export function TahunAjaranProvider({ children }) {
         rekapPerAgenda: computeRekapPerAgenda(agendaList),
       });
     } catch (err) {
-      console.error(err);
-      setError("Gagal memuat data dari server. Cek koneksi backend / login ulang.");
-    } finally {
-      setLoading(false);
+      console.error("Gagal memuat /kegiatan/matrix:", err);
+      gagal.push("Presensi Kegiatan");
     }
+
+    if (gagal.length > 0) {
+      setError(`Gagal memuat data ${gagal.join(" & ")} dari server. Cek konsol browser (F12) untuk detail error, atau coba lagi.`);
+    }
+    setLoading(false);
   }, [current, user]);
 
   useEffect(() => {
