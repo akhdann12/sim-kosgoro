@@ -28,6 +28,19 @@ function handleUnauthorized() {
   }
 }
 
+// Bikin pesan error yang informatif dari response gagal: pakai pesan dari server kalau ada,
+// dan kasih penjelasan khusus buat status yang sering muncul di hosting (timeout gateway,
+// rate limit, server error) - biar gak cuma "Gagal ambil data" tanpa tau sebabnya.
+async function pesanError(res, fallback) {
+  const body = await res.json().catch(() => ({}));
+  if (res.status === 429) return "Terlalu banyak permintaan dalam waktu singkat, tunggu sekitar 1 menit lalu coba lagi.";
+  if (res.status === 502 || res.status === 503 || res.status === 504) {
+    return `Server backend lagi lambat / belum merespons (HTTP ${res.status}). Coba lagi sebentar.`;
+  }
+  if (body.message) return res.status >= 500 ? `${body.message} (HTTP ${res.status})` : body.message;
+  return `${fallback} (HTTP ${res.status})`;
+}
+
 export async function apiGet(path, params = {}) {
   const qs = new URLSearchParams(params).toString();
   const url = `/api${path}${qs ? `?${qs}` : ""}`;
@@ -36,7 +49,7 @@ export async function apiGet(path, params = {}) {
     handleUnauthorized();
     throw new Error("Sesi login habis, silakan login ulang.");
   }
-  if (!res.ok) throw new Error(`Gagal ambil data: ${path}`);
+  if (!res.ok) throw new Error(await pesanError(res, `Gagal ambil data: ${path}`));
   return res.json();
 }
 
@@ -50,10 +63,7 @@ export async function apiPost(path, body = {}) {
     handleUnauthorized();
     throw new Error("Sesi login habis, silakan login ulang.");
   }
-  if (!res.ok) {
-    const errBody = await res.json().catch(() => ({}));
-    throw new Error(errBody.message || `Gagal kirim data: ${path}`);
-  }
+  if (!res.ok) throw new Error(await pesanError(res, `Gagal kirim data: ${path}`));
   return res.json();
 }
 
@@ -67,10 +77,7 @@ export async function apiPut(path, body = {}) {
     handleUnauthorized();
     throw new Error("Sesi login habis, silakan login ulang.");
   }
-  if (!res.ok) {
-    const errBody = await res.json().catch(() => ({}));
-    throw new Error(errBody.message || `Gagal memperbarui data: ${path}`);
-  }
+  if (!res.ok) throw new Error(await pesanError(res, `Gagal memperbarui data: ${path}`));
   return res.json();
 }
 
@@ -89,10 +96,7 @@ export async function apiUploadFile(path, file, fieldName = "file") {
     handleUnauthorized();
     throw new Error("Sesi login habis, silakan login ulang.");
   }
-  if (!res.ok) {
-    const errBody = await res.json().catch(() => ({}));
-    throw new Error(errBody.message || `Gagal upload file: ${path}`);
-  }
+  if (!res.ok) throw new Error(await pesanError(res, `Gagal upload file: ${path}`));
   return res.json();
 }
 
@@ -105,7 +109,7 @@ export async function apiDelete(path) {
     handleUnauthorized();
     throw new Error("Sesi login habis, silakan login ulang.");
   }
-  if (!res.ok) throw new Error(`Gagal hapus data: ${path}`);
+  if (!res.ok) throw new Error(await pesanError(res, `Gagal hapus data: ${path}`));
   return res.json();
 }
 

@@ -19,6 +19,21 @@ return [
 
     /*
     |--------------------------------------------------------------------------
+    | Store khusus Rate Limiter (throttle:api / throttle:6,1)
+    |--------------------------------------------------------------------------
+    |
+    | Counter rate-limit dicek & ditulis di SETIAP request API. Kalau numpang di store
+    | 'database', tiap request nambah ~8 query ke Supabase cuma buat itu (jadi ~11 query
+    | overhead per request) - kerasa banget lemot di hosting yang jaraknya jauh dari database.
+    | Dipaksa pakai 'file' (lokal ke server, 0 query) - gak ngaruh ke cache lain di aplikasi.
+    | Bisa diganti lewat env CACHE_LIMITER_STORE (misal 'redis' kalau nanti pakai Redis).
+    |
+    */
+
+    'limiter' => env('CACHE_LIMITER_STORE', 'file'),
+
+    /*
+    |--------------------------------------------------------------------------
     | Cache Stores
     |--------------------------------------------------------------------------
     |

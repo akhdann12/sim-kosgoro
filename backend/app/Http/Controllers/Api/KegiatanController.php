@@ -192,74 +192,125 @@ class KegiatanController extends Controller
     // yang jalan dari KegiatanController::matrix().
     public function importMatrix(Request $request)
     {
+        @set_time_limit(180);
+
         $validated = $request->validate([
             'kegiatan' => 'required|array|min:1',
             'kegiatan.*.nama' => 'required|string|max:255',
             'kegiatan.*.tanggal' => 'required|date',
             'guru' => 'required|array|min:1',
-            'guru.*.guru_id' => 'required|exists:guru,id',
+            'guru.*.guru_id' => 'required|integer',
             'guru.*.status' => 'required|array',
         ]);
 
+        // Cek semua guru_id sekaligus (1 query), bukan exists: per elemen (1 query per guru)
+        $guruIds = collect($validated['guru'])->pluck('guru_id')->unique()->values();
+        $guruValid = Guru::whereIn('id', $guruIds)->pluck('id')->flip();
+        $guruRows = collect($validated['guru'])->filter(fn ($g) => $guruValid->has($g['guru_id']))->values();
+
         $kegiatanIds = [];
-        foreach ($validated['kegiatan'] as $k) {
-            $kegiatan = Kegiatan::firstOrCreate([
-                'nama' => trim($k['nama']),
-                'tanggal' => Carbon::parse($k['tanggal'])->format('Y-m-d'),
-            ]);
-            $kegiatanIds[] = $kegiatan->id;
+        $kegiatanTanggal = [];
+        foreach ($validated['kegiatan'] as $idx => $k) {
+            $tanggal = Carbon::parse($k['tanggal'])->format('Y-m-d');
+            $kegiatan = Kegiatan::firstOrCreate(['nama' => trim($k['nama']), 'tanggal' => $tanggal]);
+            $kegiatanIds[$idx] = $kegiatan->id;
+            $kegiatanTanggal[$idx] = $tanggal;
         }
 
-        $disimpan = 0;
-        foreach ($validated['guru'] as $g) {
+        // Ambil SEMUA kehadiran yang sudah ada untuk kegiatan-kegiatan ini sekaligus (1 query),
+        // bandingin di memori: insert yang baru (bulk), update cuma yang statusnya BERUBAH.
+        // Sebelumnya updateOrCreate per sel (guru x kegiatan) = ratusan query per import.
+        $existing = Kehadiran::whereIn('kegiatan_id', array_values($kegiatanIds))
+            ->get()
+            ->keyBy(fn ($r) => $r->guru_id . '|' . $r->kegiatan_id);
+
+        $now = now();
+        $insert = [];
+        $update = [];
+        foreach ($guruRows as $g) {
             foreach ($g['status'] as $idx => $kode) {
                 if (!$kode || !isset($kegiatanIds[$idx])) continue;
 
-                Kehadiran::updateOrCreate(
-                    ['guru_id' => $g['guru_id'], 'kegiatan_id' => $kegiatanIds[$idx]],
-                    [
-                        'tanggal' => $validated['kegiatan'][$idx]['tanggal'],
+                $key = $g['guru_id'] . '|' . $kegiatanIds[$idx];
+                if ($existing->has($key)) {
+                    $row = $existing->get($key);
+                    if ($row->status !== $kode) $update[] = [$row, ['status' => $kode, 'sumber' => 'excel_sync']];
+                } else {
+                    $insert[] = [
+                        'guru_id' => $g['guru_id'],
+                        'kegiatan_id' => $kegiatanIds[$idx],
+                        'tanggal' => $kegiatanTanggal[$idx],
                         'status' => $kode,
+                        'keterangan' => null,
                         'sumber' => 'excel_sync',
-                    ]
-                );
-                $disimpan++;
+                        'created_at' => $now,
+                        'updated_at' => $now,
+                    ];
+                }
             }
         }
 
-        return response()->json(['kegiatan_dibuat' => count($kegiatanIds), 'kehadiran_disimpan' => $disimpan]);
+        DB::transaction(function () use ($insert, $update) {
+            foreach (array_chunk($insert, 500) as $chunk) Kehadiran::insert($chunk);
+            foreach ($update as [$row, $attrs]) $row->update($attrs);
+        });
+
+        return response()->json([
+            'kegiatan_dibuat' => count($kegiatanIds),
+            'kehadiran_disimpan' => count($insert) + count($update),
+        ]);
     }
 
     // POST /api/kegiatan
-    // Body: { nama, tanggal, tahun_ajaran_id?, kehadiran?: [{ guru_id, status }] }
-    // status dari frontend: "hadir" | "izin" | "alpa" -> dipetakan ke H/I/A
     public function store(Request $request)
     {
+        @set_time_limit(120);
+
+        // exists:guru,id per elemen array = 1 query PER GURU (31 guru = 31 query cuma buat validasi).
+        // Di sini cukup validasi bentuknya, terus cek keberadaan semua guru_id sekaligus (1 query).
         $validated = $request->validate([
             'nama' => 'required|string|max:255',
             'tanggal' => 'required|date',
             'tahun_ajaran_id' => 'nullable|exists:tahun_ajaran,id',
             'kehadiran' => 'nullable|array',
-            'kehadiran.*.guru_id' => 'required_with:kehadiran|exists:guru,id',
-            'kehadiran.*.status' => 'required_with:kehadiran|in:hadir,izin,alpa',
+            'kehadiran.*.guru_id' => 'required_with:kehadiran|integer',
+            'kehadiran.*.status' => 'required_with:kehadiran|in:hadir,izin,alpa,sakit,dinas',
         ]);
 
-        $kegiatan = DB::transaction(function () use ($validated) {
+        $rows = $validated['kehadiran'] ?? [];
+        if (!empty($rows)) {
+            $guruIds = collect($rows)->pluck('guru_id')->unique()->values();
+            if (Guru::whereIn('id', $guruIds)->count() !== $guruIds->count()) {
+                return response()->json(['message' => 'Ada guru_id yang tidak ditemukan di Data Master Guru.'], 422);
+            }
+        }
+
+        $kegiatan = DB::transaction(function () use ($validated, $rows) {
             $kegiatan = Kegiatan::create([
                 'nama' => $validated['nama'],
                 'tanggal' => $validated['tanggal'],
                 'tahun_ajaran_id' => $validated['tahun_ajaran_id'] ?? null,
             ]);
 
-            $statusMap = ['hadir' => 'H', 'izin' => 'I', 'alpa' => 'A'];
-            foreach ($validated['kehadiran'] ?? [] as $row) {
-                Kehadiran::create([
+            $statusMap = ['hadir' => 'H', 'izin' => 'I', 'alpa' => 'A', 'sakit' => 'S', 'dinas' => 'D'];
+            $now = now();
+            $tanggal = $kegiatan->tanggal->format('Y-m-d');
+            $insert = [];
+            foreach ($rows as $row) {
+                $insert[] = [
                     'guru_id' => $row['guru_id'],
                     'kegiatan_id' => $kegiatan->id,
-                    'tanggal' => $kegiatan->tanggal,
+                    'tanggal' => $tanggal,
                     'status' => $statusMap[$row['status']],
+                    'keterangan' => null,
                     'sumber' => 'manual',
-                ]);
+                    'created_at' => $now,
+                    'updated_at' => $now,
+                ];
+            }
+            // 1 query bulk, bukan create() satu-satu per guru
+            foreach (array_chunk($insert, 500) as $chunk) {
+                Kehadiran::insert($chunk);
             }
 
             return $kegiatan;

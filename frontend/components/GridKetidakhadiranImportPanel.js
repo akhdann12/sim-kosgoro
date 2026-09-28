@@ -66,9 +66,16 @@ export default function GridKetidakhadiranImportPanel({ onImport }) {
   const [lastSyncAt, setLastSyncAt] = useState(null);
   const lastMapRef = useRef(null); // Map("guruId|tanggal" -> hash) dari sync terakhir, buat deteksi data baru
   const intervalRef = useRef(null);
+  const inFlightRef = useRef(false); // true selama ada sync yang belum selesai
 
   async function fetchAndApply({ silent = false } = {}) {
     if (!connection) return;
+    // Jangan numpuk: kalau sync sebelumnya masih jalan (server lagi lambat), sync otomatis
+    // berikutnya dilewati dulu. Numpuk request bikin server makin lemot & ngantri.
+    if (inFlightRef.current) return;
+    // Tab lagi gak kelihatan -> gak perlu polling di background, hemat beban server.
+    if (silent && typeof document !== "undefined" && document.hidden) return;
+    inFlightRef.current = true;
     if (!silent) setLoading(true);
     try {
       const res = await apiGet("/ketidakhadiran/dari-spreadsheet-grid", { sheet_id: connection.sheetId, gid: connection.gid });
@@ -114,6 +121,7 @@ export default function GridKetidakhadiranImportPanel({ onImport }) {
       console.error(err);
       setStatus({ type: "error", message: err.message || "Gagal mengambil data dari spreadsheet." });
     } finally {
+      inFlightRef.current = false;
       if (!silent) setLoading(false);
     }
   }

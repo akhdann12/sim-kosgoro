@@ -98,24 +98,29 @@ export function TahunAjaranProvider({ children }) {
     const semStart = new Date(current.raw.tanggal_mulai);
     const semEnd = new Date(current.raw.tanggal_selesai);
 
-    // --- Dashboard: fetch rekap per periode (minggu/bulan/3 bulan/semester) ---
-    try {
-      const ranges = {};
-      const byPeriod = {};
-      for (const p of PERIODE_OPTIONS) {
-        const range = getPeriodRange(semStart, semEnd, p.key);
-        ranges[p.key] = range;
-        const res = await apiGet("/dashboard/rekap", { start: range.startISO, end: range.endISO });
-        byPeriod[p.key] = buildDashboardView(res);
+    // Semua request (4 periode Dashboard + matrix Presensi Kegiatan) dikirim BARENGAN (paralel),
+    // bukan berurutan - kalau server/database lagi lambat, total waktu tunggu jadi selama request
+    // terlama, bukan jumlah semua request.
+    const loadDashboard = async () => {
+      try {
+        const ranges = {};
+        PERIODE_OPTIONS.forEach((p) => { ranges[p.key] = getPeriodRange(semStart, semEnd, p.key); });
+        const hasil = await Promise.all(
+          PERIODE_OPTIONS.map((p) =>
+            apiGet("/dashboard/rekap", { start: ranges[p.key].startISO, end: ranges[p.key].endISO })
+          )
+        );
+        const byPeriod = {};
+        PERIODE_OPTIONS.forEach((p, i) => { byPeriod[p.key] = buildDashboardView(hasil[i]); });
+        setPeriodRanges(ranges);
+        setDashboardByPeriod(byPeriod);
+      } catch (err) {
+        console.error("Gagal memuat /dashboard/rekap:", err);
+        gagal.push(`Dashboard (${err.message})`);
       }
-      setPeriodRanges(ranges);
-      setDashboardByPeriod(byPeriod);
-    } catch (err) {
-      console.error("Gagal memuat /dashboard/rekap:", err);
-      gagal.push("Dashboard");
-    }
+    };
 
-    // --- Presensi Kegiatan: fetch matrix guru x agenda ---
+    const loadMatrix = async () => {
     try {
       const matrixRes = await apiGet("/kegiatan/matrix");
       const agendaBase = (matrixRes.kegiatan || []).map((k) => ({
@@ -139,8 +144,11 @@ export function TahunAjaranProvider({ children }) {
       });
     } catch (err) {
       console.error("Gagal memuat /kegiatan/matrix:", err);
-      gagal.push("Presensi Kegiatan");
+      gagal.push(`Presensi Kegiatan (${err.message})`);
     }
+    };
+
+    await Promise.all([loadDashboard(), loadMatrix()]);
 
     if (gagal.length > 0) {
       setError(`Gagal memuat data ${gagal.join(" & ")} dari server. Cek konsol browser (F12) untuk detail error, atau coba lagi.`);

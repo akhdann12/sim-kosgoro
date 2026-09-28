@@ -33,6 +33,27 @@ class SpreadsheetReader
         return self::readExcel($path);
     }
 
+    /**
+     * Parse teks CSV (misal hasil download Google Sheets) jadi array baris. Pakai fgetcsv di atas
+     * stream memori, BUKAN explode("\n") + str_getcsv - soalnya sel berkutip yang isinya ada baris
+     * baru (catatan Keterangan multi-baris) bakal kepotong jadi baris palsu kalau di-explode.
+     */
+    public static function parseCsvString(string $csv): array
+    {
+        $csv = ltrim($csv, "\xEF\xBB\xBF");
+        $handle = fopen('php://temp', 'r+');
+        fwrite($handle, $csv);
+        rewind($handle);
+
+        $rows = [];
+        while (($row = fgetcsv($handle)) !== false) {
+            $rows[] = $row;
+        }
+        fclose($handle);
+
+        return $rows;
+    }
+
     private static function readCsv(string $path): array
     {
         $rows = [];

@@ -11,6 +11,7 @@ use App\Support\GridAbsensiParser;
 use App\Support\SpreadsheetReader;
 use Illuminate\Http\Request;
 use Illuminate\Support\Carbon;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
 
 class KetidakhadiranController extends Controller
@@ -214,13 +215,26 @@ class KetidakhadiranController extends Controller
             return response()->json(['message' => 'Gagal mengambil spreadsheet. Pastikan sudah di-share sebagai "Anyone with the link".'], 422);
         }
 
-        $rows = array_map('str_getcsv', explode("\n", trim($response->body())));
+        $rows = SpreadsheetReader::parseCsvString($response->body());
 
         return $this->prosesGrid($rows);
     }
 
+    /**
+     * Simpan hasil parsing grid ke database - DIBUAT HEMAT QUERY dengan sengaja.
+     *
+     * Versi sebelumnya updateOrCreate() satu-satu (2 tabel x select + insert/update tiap baris)
+     * plus load('guru') per baris: ~130 query buat 30 catatan, DAN tetap ~80 query walau gak ada
+     * yang berubah - padahal sync otomatis jalan tiap 1 menit. Kalau jarak server ke database
+     * jauh (Railway -> Supabase), itu bisa 10-30 detik per request dan bikin server ngantri/timeout.
+     *
+     * Sekarang: ambil semua data yang sudah ada SEKALI, bandingin di memori, lalu cuma insert yang
+     * baru (bulk, 1 query) dan update yang BENERAN berubah. Sync ulang tanpa perubahan = 0 tulis.
+     */
     private function prosesGrid(array $rows): \Illuminate\Http\JsonResponse
     {
+        @set_time_limit(180);
+
         $guruList = Guru::where('aktif', true)->get();
         $hasil = GridAbsensiParser::parse($rows, $guruList);
 
@@ -228,37 +242,98 @@ class KetidakhadiranController extends Controller
             return response()->json(['message' => $hasil['ringkasan']['error']], 422);
         }
 
-        $disimpan = [];
-        foreach ($hasil['records'] as $r) {
-            $item = Ketidakhadiran::updateOrCreate(
-                [
-                    'guru_id' => $r['guru_id'],
-                    'tanggal' => $r['tanggal'],
-                ],
-                [
-                    'hari' => Carbon::parse($r['tanggal'])->translatedFormat('l'),
-                    'jam_ke' => $r['jam'] ? "{$r['jam']} Jam" : null,
-                    'kode' => $r['kode'],
-                    'guru_pengganti' => $r['guru_pengganti'],
-                    'catatan' => $r['catatan'],
-                ]
-            );
+        $records = $hasil['records'];
+        $guruNama = $guruList->pluck('nama', 'id');
 
-            Kehadiran::updateOrCreate(
-                ['guru_id' => $r['guru_id'], 'tanggal' => $r['tanggal'], 'kegiatan_id' => null],
-                [
-                    'status' => $r['kode'] === 'D' ? 'I' : $r['kode'],
-                    'keterangan' => $r['catatan'],
-                    'sumber' => 'excel_sync',
-                ]
-            );
-
-            $disimpan[] = $item->load('guru');
+        if (empty($records)) {
+            return response()->json(['synced' => 0, 'data' => [], 'ringkasan' => $hasil['ringkasan']]);
         }
 
+        $guruIds = collect($records)->pluck('guru_id')->unique()->values()->all();
+        $tanggals = collect($records)->pluck('tanggal')->unique()->values()->all();
+
+        // 1 query: semua catatan ketidakhadiran yang sudah ada untuk guru+tanggal ini
+        $existingKt = [];
+        foreach (Ketidakhadiran::whereIn('guru_id', $guruIds)->whereIn('tanggal', $tanggals)->get() as $row) {
+            $key = $row->guru_id . '|' . $row->tanggal->format('Y-m-d');
+            $existingKt[$key] ??= $row; // kalau ada lebih dari satu, pakai yang pertama (sama kayak perilaku lama)
+        }
+
+        // 1 query: cermin di tabel kehadiran (kegiatan_id NULL) - dipakai Dashboard
+        $existingKh = [];
+        foreach (Kehadiran::whereNull('kegiatan_id')->whereIn('guru_id', $guruIds)->whereIn('tanggal', $tanggals)->get() as $row) {
+            $existingKh[$row->guru_id . '|' . $row->tanggal->format('Y-m-d')] ??= $row;
+        }
+
+        $now = now();
+        $insertKt = [];
+        $insertKh = [];
+        $updateKt = []; // [model, attrs]
+        $updateKh = [];
+        $data = [];
+
+        foreach ($records as $r) {
+            $key = $r['guru_id'] . '|' . $r['tanggal'];
+            $jamKe = $r['jam'] ? "{$r['jam']} Jam" : null;
+            $statusKh = $r['kode'] === 'D' ? 'I' : $r['kode'];
+
+            $attrKt = [
+                'jam_ke' => $jamKe,
+                'kode' => $r['kode'],
+                'guru_pengganti' => $r['guru_pengganti'],
+                'catatan' => $r['catatan'],
+            ];
+
+            if (isset($existingKt[$key])) {
+                $m = $existingKt[$key];
+                $beda = false;
+                foreach ($attrKt as $k => $v) {
+                    if ($m->{$k} !== $v) { $beda = true; break; }
+                }
+                if ($beda) $updateKt[] = [$m, $attrKt];
+            } else {
+                $insertKt[] = $attrKt + [
+                    'guru_id' => $r['guru_id'],
+                    'tanggal' => $r['tanggal'],
+                    'hari' => Carbon::parse($r['tanggal'])->translatedFormat('l'),
+                    'created_at' => $now, 'updated_at' => $now,
+                ];
+            }
+
+            $attrKh = ['status' => $statusKh, 'keterangan' => $r['catatan']];
+            if (isset($existingKh[$key])) {
+                $m = $existingKh[$key];
+                if ($m->status !== $attrKh['status'] || $m->keterangan !== $attrKh['keterangan']) {
+                    $updateKh[] = [$m, $attrKh + ['sumber' => 'excel_sync']];
+                }
+            } else {
+                $insertKh[] = $attrKh + [
+                    'guru_id' => $r['guru_id'], 'tanggal' => $r['tanggal'], 'kegiatan_id' => null,
+                    'sumber' => 'excel_sync', 'created_at' => $now, 'updated_at' => $now,
+                ];
+            }
+
+            $data[] = [
+                'guru_id' => $r['guru_id'],
+                'tanggal' => $r['tanggal'],
+                'jam_ke' => $jamKe,
+                'kode' => $r['kode'],
+                'guru_pengganti' => $r['guru_pengganti'],
+                'catatan' => $r['catatan'],
+                'guru' => ['id' => $r['guru_id'], 'nama' => $guruNama[$r['guru_id']] ?? '-'],
+            ];
+        }
+
+        DB::transaction(function () use ($insertKt, $insertKh, $updateKt, $updateKh) {
+            foreach (array_chunk($insertKt, 500) as $chunk) Ketidakhadiran::insert($chunk);
+            foreach (array_chunk($insertKh, 500) as $chunk) Kehadiran::insert($chunk);
+            foreach ($updateKt as [$m, $attrs]) $m->update($attrs);
+            foreach ($updateKh as [$m, $attrs]) $m->update($attrs);
+        });
+
         return response()->json([
-            'synced' => count($disimpan),
-            'data' => $disimpan,
+            'synced' => count($data),
+            'data' => $data,
             'ringkasan' => $hasil['ringkasan'],
         ]);
     }

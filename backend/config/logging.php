@@ -54,7 +54,14 @@ return [
 
         'stack' => [
             'driver' => 'stack',
-            'channels' => explode(',', (string) env('LOG_STACK', 'single')),
+            // 'stderr' ikut ditambahkan supaya error PHP juga muncul di log hosting (Railway > service >
+            // Deployments > View logs). Tanpa ini error cuma masuk file storage/logs/laravel.log di dalam
+            // container yang gak kelihatan dari dashboard - "Server Error" jadi susah didiagnosa.
+            // (dipaksa selalu ada, walau LOG_STACK di env cuma 'single')
+            'channels' => array_values(array_unique(array_merge(
+                explode(',', (string) env('LOG_STACK', 'single')),
+                ['stderr']
+            ))),
             'ignore_exceptions' => false,
         ],
 
